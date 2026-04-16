@@ -1,5 +1,6 @@
 ---
 name: implement
+model: opus
 description: "実装パイプラインを開始する．コーディング → テスト → リファクタリングの順で 3 つのエージェントを実行し，必要に応じて人間の確認を挟む．"
 argument-hint: "<タスク内容>"
 ---
