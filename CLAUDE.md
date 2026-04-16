@@ -13,7 +13,7 @@
 
 ### Git 運用（GUIDE_04 準拠）
 
-- ブランチ名: `feature/`/`fix/`/`docs/`/`chore/` + 英単語 2〜4 語（kebab-case）
+- ブランチ名: `feature/`/`fix/`/`refactor/`/`docs/`/`chore/` + 英単語 2〜4 語（kebab-case）
 - コミットメッセージ: `[add]`/`[update]`/`[fix]`/`[remove]`/`[clean]` + 日本語
 - コミットは `/commit` を使用する（push・PR 作成は `/commit push`）
 
@@ -23,7 +23,7 @@
 - Phase 1 後に人間が動作確認，Phase 2 でテスト失敗時のみ方針判断
 - Phase 2 成功後は Phase 3 → Phase 4 まで自動で進む（Phase 4 で更新がある場合のみ確認）
 - 個別実行: coder → tester → refactorer を順に実行
-- テスト・リファクタリングをスキップしない（Stop Hook が警告）
+- テスト・リファクタリングをスキップしない
 
 ### 手動確認が必要な作業（自分で完了させないこと）
 
