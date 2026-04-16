@@ -1,5 +1,6 @@
 ---
 name: sync-template
+model: sonnet
 description: "テンプレートリポジトリから最新の変更を取り込み，ルール変更に伴うコード修正を行う．"
 argument-hint: ""
 ---

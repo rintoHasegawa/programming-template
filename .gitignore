@@ -1,0 +1,9 @@
+# /implement が /commit に渡すコンテキストファイル
+.claude/commit-context.md
+
+# -- プロジェクト立ち上げ時に有効化する（GUIDE_04 参照） --
+# .env
+# .env.*
+# node_modules/
+# build/
+# dist/

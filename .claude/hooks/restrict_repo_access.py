@@ -2,7 +2,12 @@
 
 import json
 import os
+import re
+import shlex
 import sys
+
+# Bash で検出する破壊的コマンド
+DESTRUCTIVE_COMMANDS = {"rm", "rmdir", "mv", "cp", "chmod", "chown", "unlink"}
 
 
 def get_target_path(tool_name: str, tool_input: dict) -> str | None:
@@ -20,6 +25,49 @@ def is_within_directory(target: str, base: str) -> bool:
     real_base = os.path.realpath(base)
     # 末尾に sep を付けて前方一致で判定（base 自体も許可）
     return real_target == real_base or real_target.startswith(real_base + os.sep)
+
+
+def check_bash_command(command: str, cwd: str) -> str | None:
+    """Bash コマンド内の破壊的操作がリポジトリ外を対象としていないかチェックする.
+
+    リポジトリ外のパスに対する破壊的コマンドを検出した場合、理由文字列を返す。
+    問題なければ None を返す。
+    """
+    # セミコロン、&&、|| やパイプで分割された各部分をチェック
+    parts = re.split(r"[;&|]+", command)
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            tokens = shlex.split(part)
+        except ValueError:
+            # クォートが閉じていない等のパースエラーは無視して続行
+            continue
+        if not tokens:
+            continue
+        # コマンド名を取得（env, sudo 等のプレフィックスをスキップ）
+        cmd_name = None
+        for token in tokens:
+            if token in ("sudo", "env") or "=" in token:
+                continue
+            cmd_name = os.path.basename(token)
+            break
+        if cmd_name not in DESTRUCTIVE_COMMANDS:
+            continue
+        # 破壊的コマンドの引数からパスを抽出してチェック
+        for token in tokens[1:]:
+            if token.startswith("-"):
+                continue
+            # 絶対パスまたは .. を含むパスをチェック
+            if os.path.isabs(token) or ".." in token:
+                resolved = os.path.realpath(os.path.join(cwd, token))
+                if not is_within_directory(resolved, cwd):
+                    return (
+                        f"リポジトリ外への破壊的操作をブロックしました: "
+                        f"`{cmd_name}` が `{token}` を対象としています"
+                    )
+    return None
 
 
 def deny(reason: str) -> None:
@@ -41,6 +89,15 @@ def main() -> None:
     tool_input = data.get("tool_input", {})
     cwd = data.get("cwd", os.getcwd())
 
+    # Bash ツールの破壊的コマンドチェック
+    if tool_name == "Bash":
+        command = tool_input.get("command", "")
+        reason = check_bash_command(command, cwd)
+        if reason:
+            deny(reason)
+        sys.exit(0)
+
+    # Read/Write/Edit/Glob/Grep のパスチェック
     target_path = get_target_path(tool_name, tool_input)
 
     # パスが指定されていない場合は許可（Glob/Grep の path 省略時など）
