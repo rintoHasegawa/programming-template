@@ -18,12 +18,7 @@ argument-hint: ""
 **`template` リモートが未登録の場合:**
 
 「⚠ `template` リモートが登録されていません．
-GUIDE_01 の環境構築手順に従って，以下を実行してください:
-
-```bash
-git remote add template <テンプレートリポジトリURL>
-```
-
+GUIDE_01 の環境構築手順に従って `template` リモートを登録してください．
 登録後，再度 `/sync-template` を実行してください．」
 
 → ここで処理を中断する．
@@ -61,7 +56,7 @@ git remote add template <テンプレートリポジトリURL>
 ## ステップ 3: ブランチ作成とマージ
 
 1. `git checkout -b chore/sync-template` でブランチを作成する
-   - 既に同名のブランチが存在する場合は `chore/sync-template-YYYYMMDD` を使用する
+   - 既に同名のブランチが存在する場合は削除してから作り直す
 2. `git merge template/main --no-edit` でマージを実行する
    - 初回（共通の祖先がない場合）は `--allow-unrelated-histories` を付与する
 
@@ -96,7 +91,7 @@ git remote add template <テンプレートリポジトリURL>
 
 「ルール変更に伴うコード修正は不要です．」
 
-## ステップ 6: 結果報告とコミット
+## ステップ 6: 結果報告
 
 すべての作業が完了したら，結果を報告する:
 
@@ -107,7 +102,7 @@ git remote add template <テンプレートリポジトリURL>
 - コンフリクト解決: {あり/なし}
 - コード修正: {あり（内容）/なし}
 
-`/commit` でコミットしますか？」
+`/commit push` でプッシュと PR 作成ができます．」
 
 ## 注意事項
 

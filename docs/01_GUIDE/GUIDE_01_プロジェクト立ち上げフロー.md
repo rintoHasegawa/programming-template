@@ -42,7 +42,7 @@
   - デフォルトブランチを `main` にするため，リポジトリの初期化には `git init -b main` を使用すること．
   - テンプレートの更新を受け取るため，テンプレートリポジトリをリモートに登録すること．テンプレートの変更は `/sync-template` で取り込む．
     ```bash
-    git remote add template <テンプレートリポジトリURL>
+    git remote add template https://github.com/rintoHasegawa/programming-template.git
     ```
 - **基本方針**: 環境の再現性を重視し，手順書だけに頼らず構築を自動化・コード化できる方法を優先する（例: Docker，Dev Containers，Windows Sandbox，IaC ツール等）．
 - **人間が決めること**: 開発マシンの選定，クラウドサービスのアカウント作成，環境構築方法の選択
