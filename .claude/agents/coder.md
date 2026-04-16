@@ -8,7 +8,11 @@ tools:
   - Grep
   - Edit
   - Write
-  - Bash(git *)
+  - Bash(git diff *)
+  - Bash(git status *)
+  - Bash(git log *)
+  - Bash(git stash *)
+  - Bash(git branch *)
   - Bash(npm *)
   - Bash(npx *)
   - Bash(pnpm *)
