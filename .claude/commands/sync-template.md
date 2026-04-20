@@ -8,6 +8,8 @@ argument-hint: ""
 あなたはテンプレート同期の担当者です．
 テンプレートリポジトリから最新の変更を取り込み，必要に応じてプロジェクトのコードを修正してください．
 
+実行環境: bash（Git Bash または Unix シェル）が必要．`mktemp`, `rm -rf`, `cat`, シェル変数展開を使用する．
+
 テンプレート URL: `https://github.com/rintoHasegawa/programming-template.git`
 
 ## ステップ 1: 事前確認
@@ -47,31 +49,78 @@ LAST_SHA=$(cat .claude/template-sync-sha)
 
 - `NEW_SHA != LAST_SHA` の場合:
   ```bash
-  git -C "$TEMP_DIR" diff --name-only "$LAST_SHA" HEAD
+  # A=追加, M=変更, D=削除, R=リネーム の種別付きで取得
+  CHANGED_ENTRIES=$(git -C "$TEMP_DIR" diff --name-status "$LAST_SHA" HEAD)
   ```
-  で変更されたファイル一覧を取得する．
+  で変更されたファイルを種別付きで取得する．
 
 **ファイルが存在しない場合（初回同期）:**
 
-テンプレートの全ファイルを対象とする．
+テンプレートの全ファイルを「追加（A）」として対象に含める:
+
+```bash
+CHANGED_ENTRIES=$(cd "$TEMP_DIR" && find . -type f -not -path "./.git/*" | sed 's|^\./||' | awk -v OFS='\t' '{print "A", $0}')
+```
 
 ## ステップ 4: 変更一覧をユーザーに提示
 
-取り込み対象のファイル一覧と，各ファイルの変更概要をユーザーに提示する:
+取り込み対象のファイル一覧を種別ごとに整理してユーザーに提示する:
 
 「**テンプレートに以下の変更があります:**
 
-{ファイル一覧}
+- 追加 (A): {ファイル一覧}
+- 変更 (M): {ファイル一覧}
+- 削除 (D): {ファイル一覧}
+- リネーム (R): {旧名 → 新名}
 
 取り込みを開始します．」
 
-## ステップ 5: ブランチ作成とファイルコピー
+## ステップ 5: ブランチ作成とファイル反映
 
 1. `git checkout -b chore/sync-template` でブランチを作成する
    - 既に同名のブランチが存在する場合は削除してから作り直す
-2. 対象ファイルをテンプレートからプロジェクトにコピーする（既存ファイルは上書き）
-3. `echo "$NEW_SHA" > .claude/template-sync-sha` で同期済み SHA を記録する
-4. `rm -rf "$TEMP_DIR"` で一時ディレクトリを削除する
+
+2. 追加・変更・リネーム先を反映する:
+
+   ```bash
+   echo "$CHANGED_ENTRIES" | while IFS=$'\t' read -r status file newfile; do
+     [ -z "$status" ] && continue
+     case "$status" in
+       A|M)
+         mkdir -p "$(dirname "$file")"
+         cp "$TEMP_DIR/$file" "$file"
+         ;;
+       R*)
+         # file=旧パス, newfile=新パス
+         mkdir -p "$(dirname "$newfile")"
+         cp "$TEMP_DIR/$newfile" "$newfile"
+         ;;
+     esac
+   done
+   ```
+
+3. 削除候補（D およびリネーム元）を抽出する:
+
+   ```bash
+   DELETIONS=$(echo "$CHANGED_ENTRIES" | awk -F'\t' '$1 == "D" {print $2} $1 ~ /^R/ {print $2}')
+   ```
+
+4. `$DELETIONS` が空でない場合，ユーザーに確認を求める:
+
+   「**以下のファイルはテンプレートから削除されています:**
+
+   {削除候補一覧}
+
+   プロジェクトからも削除してよいですか？（残したいファイルがあれば指定してください）」
+
+   ユーザー確認後，対象ファイルを `rm` で削除する．プロジェクトが独自に残したいファイルは削除対象から除外する．
+
+5. 同期済み SHA を記録し，一時ディレクトリを削除する:
+
+   ```bash
+   echo "$NEW_SHA" > .claude/template-sync-sha
+   rm -rf "$TEMP_DIR"
+   ```
 
 ## ステップ 6: 変更内容の分析
 
@@ -112,3 +161,4 @@ LAST_SHA=$(cat .claude/template-sync-sha)
 - テンプレートリポジトリへの push は行わない
 - コード修正はユーザーの確認なしに実行しない
 - ファイルコピーによりプロジェクト固有の変更が上書きされる場合は，`git diff` で確認してユーザーに報告する
+- `chore/sync-template` ブランチは他の作業ブランチと混ぜず，作成後は速やかにマージすること．複数の作業ブランチで `/sync-template` を実行すると `.claude/template-sync-sha` がコンフリクトする．コンフリクト時は新しい（HEAD 側の）SHA を採用すること．
