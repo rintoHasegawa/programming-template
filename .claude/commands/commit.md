@@ -1,6 +1,6 @@
 ---
 name: commit
-model: sonnet
+model: inherit
 description: "GUIDE_04 に従い，変更内容の確認 → コミットを行う．"
 argument-hint: "<コミット内容の補足（省略可）>"
 ---
