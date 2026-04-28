@@ -24,6 +24,16 @@ argument-hint: ""
 
 マージ処理の対象は **既存ファイルが存在する場合のみ**．初回同期（`.claude/template-sync-sha` がない状態）では全ファイルが A 扱いとなるが，これらのファイルはフレームワーク初期化（`flutter create` / `npm init` 等）や `/init` で既にプロジェクトに存在するのが通常なので，そのままマージ処理に入る．既存ファイルがない稀なケースに限り通常の `cp` で配置する．
 
+## 同期対象外ファイル (Skip-on-sync Files)
+
+以下のファイルはテンプレート紹介専用であり，テンプレートから作られた各プロジェクトには反映しない．コピー・上書き・削除のいずれも行わない．
+
+| ファイル | 理由 | 方針 |
+| --- | --- | --- |
+| `README.md` | テンプレートの README は GitHub の repo ページ向けのテンプレート紹介用．各プロジェクトは独自の README を持つべき | プロジェクト側にコピー・上書きしない．テンプレート側の追加・変更・削除も無視する |
+
+判定はステップ 5.3 のループ内でマージ必須ファイル判定より先に行う．
+
 ## ステップ 1: 事前確認
 
 `git status` でワーキングツリーがクリーンか確認する．
@@ -120,10 +130,19 @@ diff -u .gitattributes "$TEMP_DIR/.gitattributes" | head -30
 
 ```bash
 MERGE_FILES=(".gitignore" "CLAUDE.md" ".gitattributes")
+SKIP_FILES=("README.md")
 
 is_merge_file() {
   local t="$1"
   for f in "${MERGE_FILES[@]}"; do
+    [ "$f" = "$t" ] && return 0
+  done
+  return 1
+}
+
+is_skip_file() {
+  local t="$1"
+  for f in "${SKIP_FILES[@]}"; do
     [ "$f" = "$t" ] && return 0
   done
   return 1
@@ -139,6 +158,10 @@ echo "$CHANGED_ENTRIES" | while IFS=$'\t' read -r status file newfile; do
   [ -z "$status" ] && continue
   case "$status" in
     A|M)
+      # 同期対象外ファイルは完全にスキップ（コピーも上書きもしない）
+      if is_skip_file "$file"; then
+        continue
+      fi
       # マージ必須ファイルで既存ファイルがある場合は 5.4 で処理
       if is_merge_file "$file" && [ -f "$file" ]; then
         continue
@@ -148,6 +171,9 @@ echo "$CHANGED_ENTRIES" | while IFS=$'\t' read -r status file newfile; do
       ;;
     R*)
       # file=旧パス, newfile=新パス
+      if is_skip_file "$newfile"; then
+        continue
+      fi
       if is_merge_file "$newfile" && [ -f "$newfile" ]; then
         continue
       fi
@@ -273,6 +299,7 @@ rm -rf "$TEMP_DIR"
 - テンプレートリポジトリへの push は行わない
 - コード修正はユーザーの確認なしに実行しない
 - マージ必須ファイル（`.gitignore`, `CLAUDE.md`, `.gitattributes`）は必ずステップ 5.4 の手順でマージする．盲目的な `cp` で上書きしない（フレームワーク固有の除外ルールやプロジェクト固有セクションが失われる）
+- 同期対象外ファイル（`README.md`）はテンプレート紹介用のためプロジェクトには反映しない．テンプレート側で追加・変更・削除があってもプロジェクトの該当ファイルは触らない
 - 通常コピー対象でもプロジェクト固有の変更が上書きされうる場合は，`git diff` で確認してユーザーに報告する
 - テンプレートが管理するのは `.claude/` 配下のうち `agents/`，`commands/`，`hooks/`，`settings.json`，`template-sync-sha` のみ．`.claude/plans/` や `.claude/commit-context.md` 等のプロジェクト固有ファイルはテンプレートに含まれないため同期対象外
 - `chore/sync-template` ブランチは他の作業ブランチと混ぜず，作成後は速やかにマージすること．複数の作業ブランチで `/sync-template` を実行すると `.claude/template-sync-sha` がコンフリクトする．コンフリクト時は新しい（HEAD 側の）SHA を採用すること．
