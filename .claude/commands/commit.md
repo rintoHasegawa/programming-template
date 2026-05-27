@@ -40,19 +40,23 @@ argument-hint: "<コミット内容の補足（省略可）>"
 
 変更内容と $ARGUMENTS（指定がある場合）をもとに，GUIDE_04 の「コミットメッセージ」セクションに従ってコミットメッセージを生成する．
 
-## ステップ 4: CLAUDE.md 更新漏れチェック
+## ステップ 4: CLAUDE.md / PROGRESS.md 更新漏れチェック
 
-`.claude/commit-context.md` が存在し `claude_md_updated` が記録されている場合，このステップをスキップする．
+`.claude/commit-context.md` が存在し `claude_md_updated` と `progress_md_updated` が記録されている場合，このステップをスキップする．
 
-ファイルが存在しない場合（`/implement` を経由していない場合），変更内容に応じて CLAUDE.md の「開発進捗」セクションの更新が必要か判断し，
-更新されていない場合は「⚠ CLAUDE.md の開発進捗の更新が必要かもしれません．確認してください．」と警告する．
+ファイルが存在しない場合（`/implement` を経由していない場合），変更内容に応じて以下の更新が必要か判断する:
+
+- CLAUDE.md の「開発進捗」セクション（最新 1 行）
+- `docs/PROGRESS.md`（追記型フルログ）
+
+更新されていない場合は「⚠ CLAUDE.md の開発進捗 / docs/PROGRESS.md の更新が必要かもしれません．確認してください．」と警告する．
 更新自体は行わず，ユーザーの判断に委ねる．
 
 ## ステップ 5: コミット
 
 以下を実行する:
 
-1. `git add` で関連ファイルをステージングする（CLAUDE.md の変更がある場合はそれも含める）
+1. `git add` で関連ファイルをステージングする（CLAUDE.md / `docs/PROGRESS.md` の変更がある場合はそれも含める）
 2. `git commit -m "{コミットメッセージ}"` でコミットする
 3. `.claude/commit-context.md` が存在する場合は削除する
 
