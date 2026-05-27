@@ -20,6 +20,7 @@ argument-hint: ""
 | --- | --- | --- |
 | `.gitignore` | フレームワーク固有ルール（Flutter/Node 等）を保持する必要がある | テンプレート側の実効行で既存に含まれないもののみを追記．既存行は触らない |
 | `CLAUDE.md` | プロジェクト名・開発進捗・固有規約を保持する必要がある | テンプレートで変更された共通セクション（必須ルール，エージェントチーム，ドキュメント構成等）のみを Edit で更新．プロジェクト固有セクションは触らない |
+| `docs/PROGRESS.md` | プロジェクト固有の進捗ログを保持する必要がある | 既存ファイルがある場合は内容を上書きしない．テンプレート側の骨組み（タイトル・案内コメント）に差分があれば通知のみ行い手動マージを促す |
 | `.gitattributes` | プロジェクトによって設定が異なる可能性がある | 差分を表示し，ユーザーに「上書き / マージ / スキップ」を問う |
 
 マージ処理の対象は **既存ファイルが存在する場合のみ**．初回同期（`.claude/template-sync-sha` がない状態）では全ファイルが A 扱いとなるが，これらのファイルはフレームワーク初期化（`flutter create` / `npm init` 等）や `/init` で既にプロジェクトに存在するのが通常なので，そのままマージ処理に入る．既存ファイルがない稀なケースに限り通常の `cp` で配置する．
@@ -86,7 +87,7 @@ CHANGED_ENTRIES=$(cd "$TEMP_DIR" && find . -type f -not -path "./.git/*" | sed '
 
 ## ステップ 4: 変更一覧をユーザーに提示
 
-取り込み対象のファイル一覧を種別ごとに整理してユーザーに提示する．マージ必須ファイル（`.gitignore`, `CLAUDE.md`, `.gitattributes`）に変更がある場合は，**ユーザーが取り込み前に影響範囲を把握できるよう差分サマリーを先出しする**:
+取り込み対象のファイル一覧を種別ごとに整理してユーザーに提示する．マージ必須ファイル（`.gitignore`, `CLAUDE.md`, `docs/PROGRESS.md`, `.gitattributes`）に変更がある場合は，**ユーザーが取り込み前に影響範囲を把握できるよう差分サマリーを先出しする**:
 
 「**テンプレートに以下の変更があります:**
 
@@ -99,6 +100,7 @@ CHANGED_ENTRIES=$(cd "$TEMP_DIR" && find . -type f -not -path "./.git/*" | sed '
 
 - `.gitignore`（既存 {N} 行 / テンプレート {M} 行．既存の固有ルールを保持し，テンプレート側で追加されている {K} 行を追記）
 - `CLAUDE.md`（既存にプロジェクト固有セクションが {L} 行．テンプレート更新セクションのみマージ）
+- `docs/PROGRESS.md`（プロジェクト固有の進捗ログ．既存があれば内容を保持し，差分があれば通知のみ）
 - `.gitattributes`（差分 {D} 行．処理方針をユーザーに確認）
 
 取り込みを開始します．」
@@ -107,7 +109,7 @@ CHANGED_ENTRIES=$(cd "$TEMP_DIR" && find . -type f -not -path "./.git/*" | sed '
 
 ```bash
 # 既存ファイル行数
-wc -l .gitignore CLAUDE.md .gitattributes 2>/dev/null
+wc -l .gitignore CLAUDE.md docs/PROGRESS.md .gitattributes 2>/dev/null
 
 # テンプレート側の実効行数（.gitignore）
 grep -vE '^\s*(#|$)' "$TEMP_DIR/.gitignore" | wc -l
@@ -115,6 +117,7 @@ grep -vE '^\s*(#|$)' "$TEMP_DIR/.gitignore" | wc -l
 # 既存ファイルとテンプレート最新版の差分プレビュー
 diff -u .gitignore "$TEMP_DIR/.gitignore" | head -30
 diff -u CLAUDE.md "$TEMP_DIR/CLAUDE.md" | head -50
+diff -u docs/PROGRESS.md "$TEMP_DIR/docs/PROGRESS.md" | head -30
 diff -u .gitattributes "$TEMP_DIR/.gitattributes" | head -30
 ```
 
@@ -129,7 +132,7 @@ diff -u .gitattributes "$TEMP_DIR/.gitattributes" | head -30
 以降の処理で利用する判定関数を定義する:
 
 ```bash
-MERGE_FILES=(".gitignore" "CLAUDE.md" ".gitattributes")
+MERGE_FILES=(".gitignore" "CLAUDE.md" "docs/PROGRESS.md" ".gitattributes")
 SKIP_FILES=("README.md")
 
 is_merge_file() {
@@ -223,6 +226,18 @@ done
 4. テンプレート側で変更があった共通セクションのみを Edit で既存ファイルに反映する．プロジェクト固有セクションは一切触らない
 5. `git diff CLAUDE.md` で結果を表示しユーザーに確認する
 
+**`docs/PROGRESS.md` のマージ手順**
+
+`docs/PROGRESS.md` はプロジェクト固有の進捗ログのため，**既存ファイルがある場合は内容を上書きしない**．テンプレート側の更新は骨組み（タイトル・案内コメント）に限定されるはずなので，差分があれば通知のみ行い手動マージを促す:
+
+1. 既存 `docs/PROGRESS.md` とテンプレート版 `$TEMP_DIR/docs/PROGRESS.md` を Read する
+2. 差分を表示する:
+   ```bash
+   diff -u docs/PROGRESS.md "$TEMP_DIR/docs/PROGRESS.md"
+   ```
+3. 差分がある場合，「⚠ テンプレート側の `docs/PROGRESS.md` 骨組みに変更があります．既存の追記内容を保持したまま骨組みを反映したい場合はファイルを直接編集してください．自動マージは行いません．」と通知する
+4. 既存ファイルが無い稀なケース（テンプレートを使わずに作られた古いプロジェクト等）に限り，テンプレート版をそのまま `cp` で配置する
+
 **`.gitattributes` のマージ手順**
 
 1. 既存ファイルとテンプレート版の差分を表示する:
@@ -298,7 +313,7 @@ rm -rf "$TEMP_DIR"
 
 - テンプレートリポジトリへの push は行わない
 - コード修正はユーザーの確認なしに実行しない
-- マージ必須ファイル（`.gitignore`, `CLAUDE.md`, `.gitattributes`）は必ずステップ 5.4 の手順でマージする．盲目的な `cp` で上書きしない（フレームワーク固有の除外ルールやプロジェクト固有セクションが失われる）
+- マージ必須ファイル（`.gitignore`, `CLAUDE.md`, `docs/PROGRESS.md`, `.gitattributes`）は必ずステップ 5.4 の手順でマージする．盲目的な `cp` で上書きしない（フレームワーク固有の除外ルールやプロジェクト固有セクションが失われる）
 - 同期対象外ファイル（`README.md`）はテンプレート紹介用のためプロジェクトには反映しない．テンプレート側で追加・変更・削除があってもプロジェクトの該当ファイルは触らない
 - 通常コピー対象でもプロジェクト固有の変更が上書きされうる場合は，`git diff` で確認してユーザーに報告する
 - テンプレートが管理するのは `.claude/` 配下のうち `agents/`，`commands/`，`hooks/`，`settings.json`，`template-sync-sha` のみ．`.claude/plans/` や `.claude/commit-context.md` 等のプロジェクト固有ファイルはテンプレートに含まれないため同期対象外
