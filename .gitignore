@@ -1,6 +1,10 @@
 # /implement が /commit に渡すコンテキストファイル
 .claude/commit-context.md
 
+# /auto-refactor のローカル運用状態（スキップ台帳・ドキュメント要確認リスト）
+.claude/auto-refactor-skip.md
+.claude/auto-refactor-doc-review.md
+
 # -- プロジェクト立ち上げ時に有効化する（GUIDE_04 参照） --
 # .env
 # .env.*
