@@ -1,7 +1,7 @@
 ---
 name: coder
 description: "機能実装・バグ修正に集中するエージェント．テストやリファクタリングは行わない．実装パイプライン（/implement）の Phase 1 で使用される．"
-model: sonnet
+model: opus
 tools:
   - Read
   - Glob
