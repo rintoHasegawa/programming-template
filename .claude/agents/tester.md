@@ -1,7 +1,7 @@
 ---
 name: tester
 description: "仕様ベースでテストを作成・実行するエージェント．実装の正しさを検証する．実装パイプライン（/implement）の Phase 2 で使用される．"
-model: sonnet
+model: opus
 tools:
   - Read
   - Glob

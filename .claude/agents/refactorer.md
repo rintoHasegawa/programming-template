@@ -1,7 +1,7 @@
 ---
 name: refactorer
 description: "テストが通っている状態でコード品質を改善するエージェント．テストを安全網として使い，挙動を変えずにリファクタリングする．実装パイプライン（/implement）の Phase 3 で使用される．"
-model: sonnet
+model: opus
 tools:
   - Read
   - Glob
