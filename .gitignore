@@ -6,6 +6,11 @@
 .claude/auto-refactor-doc-review.md
 .claude/auto-refactor-test-review.md
 
+# /auto-audit のローカル運用状態（報告台帳・修正済み台帳・スキップ台帳）
+.claude/auto-audit-report.md
+.claude/auto-audit-fixed.md
+.claude/auto-audit-skip.md
+
 # -- プロジェクト立ち上げ時に有効化する（GUIDE_04 参照） --
 # .env
 # .env.*
