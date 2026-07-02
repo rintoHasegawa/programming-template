@@ -143,6 +143,8 @@ Phase 3 完了後，実装内容に応じて `docs/`, `CLAUDE.md`, `docs/PROGRES
 
 ## 進捗記録の運用ルール（CLAUDE.md / PROGRESS.md）
 
+> ⚠ **チーム開発モード（team）では本節は上書きされる**．team プロジェクトでは進捗を `CLAUDE.md`・`docs/PROGRESS.md` に書かず，GitHub Issues と git 履歴で追う（[GUIDE_06](GUIDE_06_チーム開発ルール.md)）．以下は個人開発モード（solo）の既定ルールである．team モードでは Phase 4 の進捗更新を Issue コメント（`/task-handoff` 等）に置き換える．
+
 進捗記録は **2 ファイルの二段構成**で管理する．Phase 4 や `/setup` 中断時にこれらを更新する．
 
 | ファイル | 役割 | 更新方法 |

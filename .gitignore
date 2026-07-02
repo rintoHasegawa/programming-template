@@ -1,3 +1,6 @@
+# 個人・マシン固有の Claude 設定（共有 settings.json を汚さない．GUIDE_06）
+.claude/settings.local.json
+
 # /implement が /commit に渡すコンテキストファイル
 .claude/commit-context.md
 
