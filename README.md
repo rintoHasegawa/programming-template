@@ -32,7 +32,7 @@ rm README.md
 
 その後 Claude Code を起動し，`/setup <project-name>` でプロジェクト立ち上げを開始する．`/setup` の冒頭で **solo / team のモードを選択**する（選択結果は `.claude/project-mode` に記録され，以降の `/sync-template` がモードに応じてチーム層ファイルを出し分ける）．以降，テンプレートの更新を取り込むときは `/sync-template` を実行する．
 
-> 個人で始めたプロジェクトを後からチーム開発に切り替える場合は，`.claude/project-mode` を `team` に書き換えて `/sync-template` を実行すれば，チーム層ファイル（GUIDE_06/07・`task-*`・`check_sync.sh`）が配置される．`/setup` を再実行して team を選び直してもよい．
+> 途中でモードを切り替える場合は **`/set-mode <solo|team>`** を実行する．team 層ファイル（GUIDE_06/07・`task-*`・`check_sync.sh`）の配置／削除，`settings.json` の hook 配線，`CLAUDE.md` の team 化／solo 化，`.claude/project-mode` の更新を一括で整合させる（`.claude/project-mode` を手で書き換えるだけでは切り替わらない）．
 
 ## 主なスラッシュコマンド
 
@@ -40,6 +40,7 @@ rm README.md
 - `/implement <タスク>` — 実装パイプライン（コーディング → テスト → リファクタリング）
 - `/commit` / `/commit push` — コミット作成（`push` でプッシュと PR 作成まで）
 - `/sync-template` — テンプレートの最新変更を取り込む
+- `/set-mode <solo\|team>` — 開発モードを切り替える（team 層ファイル・settings.json・CLAUDE.md・project-mode を一括整合）
 - `/task-create` / `/task-start` / `/task-handoff` — **team モードのみ**．Issue ベースのタスク作成・着手・引継ぎ
 
 ## ドキュメント

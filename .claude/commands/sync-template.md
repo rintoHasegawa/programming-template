@@ -384,7 +384,7 @@ rm -rf "$TEMP_DIR"
 
 `.claude/project-mode` が存在せず `solo` 扱いにした場合は，末尾に次を添える:
 
-「※ `.claude/project-mode` が未設定のため solo として同期しました．チーム開発なら `.claude/project-mode` に `team` と記入して再同期してください．」
+「※ `.claude/project-mode` が未設定のため solo として同期しました．チーム開発にする場合は `/set-mode team` を実行してください（`.claude/project-mode` を手で書き換えるだけでは team 層は配置されません）．」
 
 ## 注意事項
 
@@ -392,7 +392,7 @@ rm -rf "$TEMP_DIR"
 - コード修正はユーザーの確認なしに実行しない
 - マージ必須ファイル（`.gitignore`, `CLAUDE.md`, `docs/PROGRESS.md`, `.gitattributes`）は必ずステップ 5.4 の手順でマージする．盲目的な `cp` で上書きしない（フレームワーク固有の除外ルールやプロジェクト固有セクションが失われる）
 - 同期対象外ファイル（`README.md`）はテンプレート紹介用のためプロジェクトには反映しない．テンプレート側で追加・変更・削除があってもプロジェクトの該当ファイルは触らない
-- チーム層ファイル（`GUIDE_06`／`GUIDE_07`／`task-*`／`check_sync.sh`）は `.claude/project-mode` が `team` のプロジェクトにのみ同期する．`solo`（または未設定）のプロジェクトには配置・更新・削除いずれもしない．team 開発に切り替える場合は `.claude/project-mode` を `team` に書き換えてから再同期すればチーム層が配置される（`/setup` を再実行して team を選び直してもよい）
+- チーム層ファイル（`GUIDE_06`／`GUIDE_07`／`task-*`／`check_sync.sh`）は `.claude/project-mode` が `team` のプロジェクトにのみ同期する．`solo`（または未設定）のプロジェクトには配置・更新・削除いずれもしない．`/sync-template` は「版の追従」のみを行い，**モードの切り替えはしない**．solo↔team の切替は `/set-mode <solo|team>` を使う（team 層ファイルの配置／削除・`settings.json` 配線・`CLAUDE.md` の team 化／solo 化・`project-mode` 更新を一括で行う）．`.claude/project-mode` を手で書き換えるだけでは切り替わらない
 - `.claude/settings.json` はマージ必須ファイル．team の SessionStart(check_sync) 配線を保持したままテンプレートの hook 変更を統合する．盲目的な `cp` で上書きしない
 - 通常コピー対象でもプロジェクト固有の変更が上書きされうる場合は，`git diff` で確認してユーザーに報告する
 - テンプレートが管理するのは `.claude/` 配下のうち `agents/`，`commands/`，`hooks/`，`settings.json`，`template-sync-sha` のみ．`.claude/plans/` や `.claude/commit-context.md` 等のプロジェクト固有ファイルはテンプレートに含まれないため同期対象外
