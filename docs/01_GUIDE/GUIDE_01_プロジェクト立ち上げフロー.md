@@ -38,7 +38,7 @@
 開発環境を構築し，手順をドキュメント化する．初回のみの管理者作業と，メンバーが繰り返し行う構築手順を分けて整備する．
 
 - **前提条件**: 以下のツールは全プロジェクト共通で導入する．
-  - `git` — バージョン管理（[GUIDE_04](GUIDE_04_Git運用ルール.md) で運用ルールを定義）
+  - `git` — バージョン管理（運用ルールは `.claude/rules/git-conventions.md` で定義）
   - `gh` — GitHub CLI（PR 作成・マージ等に使用）
 - **基本方針**: 環境の再現性を重視し，手順書だけに頼らず構築を自動化・コード化できる方法を優先する（例: Docker，Dev Containers，Windows Sandbox，IaC ツール等）．
 - **人間が決めること**: 開発マシンの選定，クラウドサービスのアカウント作成，環境構築方法の選択
@@ -83,7 +83,7 @@
 
 開発計画に沿って AI と協働で実装を進める．
 
-- 各ステップの完了時に [GUIDE_04_Git運用ルール](GUIDE_04_Git運用ルール.md) に従ってコミット・PR を作成する（ドキュメント書式は `.claude/rules/markdown-style.md` が自動適用される）．
+- 各ステップの完了時に Git 規約（`.claude/rules/git-conventions.md`）に従ってコミット・PR を作成する（ドキュメント書式は `.claude/rules/markdown-style.md` が自動適用される）．
 - 仕様変更が発生した場合は，先にドキュメントを更新してから実装に反映する．
 
 ## CLAUDE.md の管理 (CLAUDE.md Management)

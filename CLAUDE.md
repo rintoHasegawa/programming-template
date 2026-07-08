@@ -11,9 +11,9 @@
 
 <!-- プロジェクト立ち上げ後，規約整備フェーズで追加する -->
 
-### Git 運用（GUIDE_04 準拠）
+### Git 運用
 
-- ブランチ名・コミットメッセージの書式は GUIDE_04 に従う
+- ブランチ名・コミットメッセージの書式は `.claude/rules/git-conventions.md` に従う（常時ロードされる）
 - コミットは `/commit` を使用する（push・PR 作成は `/commit push`）
 - **`/commit` はユーザーが明示的に指示した時のみ実行する．Claude が自発的に `/commit` や `git commit` を呼んではならない**（`/implement` 完了後も，案内するだけで自分ではコミットしない）
   - **例外**: 以下の無人運転ループはユーザー承認済みの例外として専用ブランチに自律コミットする．いずれも push・PR・マージ・`main` への操作はしない（取り込みは人間が `/commit push` 等で行う）
@@ -43,9 +43,8 @@
 ### 01_GUIDE（規約・ルール）
 
 - プロジェクト立ち上げフロー: docs/01_GUIDE/GUIDE_01_プロジェクト立ち上げフロー.md
-- Git 運用ルール: docs/01_GUIDE/GUIDE_04_Git運用ルール.md
 - エージェント運用ルール: docs/01_GUIDE/GUIDE_05_エージェント運用ルール.md
-- ※ ドキュメント書式・命名規則・進捗記録は `.claude/rules/`（markdown-style / docs-naming / progress-log）に定義されており，該当ファイルの編集時に自動ロードされる
+- ※ Git 規約・ドキュメント書式・命名規則・進捗記録は `.claude/rules/`（git-conventions / markdown-style / docs-naming / progress-log）に定義されている（git-conventions は常時，他は該当ファイル編集時に自動ロード）
 - ※ コーディング規約，テスト方針等はプロジェクト立ち上げ時に作成する（GUIDE_01 参照）
 
 ### 02_ENV（環境）

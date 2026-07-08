@@ -30,7 +30,7 @@
 ```
 人間: /implement <タスク内容>
   │
-  ├─ ブランチ作成（GUIDE_04 準拠）
+  ├─ ブランチ作成（git-conventions ルール準拠）
   │
   ├─ Phase 1 ──▶ [Coder]
   │                実装に集中．テスト・リファクタは行わない
@@ -132,7 +132,7 @@ Phase 3 完了後，実装内容に応じて `docs/`, `CLAUDE.md`, `docs/PROGRES
 
 ## コミットルール (Commit Rules)
 
-パイプライン完了後は `/commit` でコミットする．コミットメッセージのタグ等は [GUIDE_04](GUIDE_04_Git運用ルール.md) に従う．
+パイプライン完了後は `/commit` でコミットする．コミットメッセージのタグ等は `.claude/rules/git-conventions.md` に従う．
 
 ※ リファクタリングとテストは実装と一体の成果物として，まとめてコミットする．必要に応じて分割コミットも可．
 

@@ -14,7 +14,7 @@
 .claude/auto-audit-fixed.md
 .claude/auto-audit-skip.md
 
-# -- プロジェクト立ち上げ時に有効化する（GUIDE_04 参照） --
+# -- プロジェクト立ち上げ時に有効化する（.claude/rules/git-conventions.md 参照） --
 # .env
 # .env.*
 # node_modules/
