@@ -1,10 +1,20 @@
-"""PreToolUse hook: リポジトリ外のファイルアクセスをブロックする."""
+"""PreToolUse hook: リポジトリ外のファイルアクセスをブロックする.
+
+例外としてシステム一時ディレクトリ（/tmp・%TEMP% 等）は許可ゾーンとする:
+- Read/Glob/Grep: 一時ディレクトリ配下なら許可
+  （/sync-template・/set-mode がテンプレートを mktemp -d に clone して読むため）
+- Bash の破壊的コマンド: 対象が一時ディレクトリ配下なら許可
+  （cp "$TEMP_DIR/..." や rm -rf "$TEMP_DIR" の後片付けは正当な操作）
+- Write/Edit: 一時ディレクトリでもリポジトリ外は従来どおりブロック
+"""
 
 import json
 import os
+import posixpath
 import re
 import shlex
 import sys
+import tempfile
 
 # Bash で検出する破壊的コマンド
 DESTRUCTIVE_COMMANDS = {"rm", "rmdir", "mv", "cp", "chmod", "chown", "unlink"}
@@ -25,6 +35,22 @@ def is_within_directory(target: str, base: str) -> bool:
     real_base = os.path.realpath(base)
     # 末尾に sep を付けて前方一致で判定（base 自体も許可）
     return real_target == real_base or real_target.startswith(real_base + os.sep)
+
+
+def is_temp_path(path: str) -> bool:
+    """path がシステム一時ディレクトリ配下かを判定する.
+
+    OS ネイティブの一時ディレクトリ（tempfile.gettempdir()）に加え，
+    Git Bash 等の POSIX 形式 /tmp も文字列正規化で判定する
+    （Windows では /tmp が実パスに解決できないため realpath に頼れない）．
+    `..` は正規化してから判定するので /tmp/../etc のような脱出は温存されない．
+    """
+    # POSIX 形式 /tmp の判定（.. を潰してから前方一致）
+    norm = posixpath.normpath(path.replace("\\", "/"))
+    if norm == "/tmp" or norm.startswith("/tmp/"):
+        return True
+    # OS ネイティブの一時ディレクトリの判定
+    return is_within_directory(path, tempfile.gettempdir())
 
 
 def check_bash_command(command: str, cwd: str) -> str | None:
@@ -61,6 +87,10 @@ def check_bash_command(command: str, cwd: str) -> str | None:
                 continue
             # 絶対パスまたは .. を含むパスをチェック
             if os.path.isabs(token) or ".." in token:
+                # 一時ディレクトリ配下への破壊的操作は許可
+                # （テンプレート clone の cp・後片付けの rm -rf 等）
+                if is_temp_path(token):
+                    continue
                 resolved = os.path.realpath(os.path.join(cwd, token))
                 if not is_within_directory(resolved, cwd):
                     return (
@@ -102,6 +132,12 @@ def main() -> None:
 
     # パスが指定されていない場合は許可（Glob/Grep の path 省略時など）
     if target_path is None:
+        sys.exit(0)
+
+    # 読み取り専用ツールは一時ディレクトリ配下なら許可
+    # （/sync-template・/set-mode が mktemp -d に clone したテンプレートを読む）
+    # Write/Edit は一時ディレクトリでもブロックを維持する
+    if tool_name in ("Read", "Glob", "Grep") and is_temp_path(target_path):
         sys.exit(0)
 
     if not is_within_directory(target_path, cwd):
