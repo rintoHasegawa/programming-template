@@ -21,9 +21,9 @@ argument-hint: "<solo | team>"
 ```
 docs/01_GUIDE/GUIDE_06_チーム開発ルール.md
 docs/01_GUIDE/GUIDE_07_Issues・Projects運用ガイド.md
-.claude/commands/task-create.md
-.claude/commands/task-start.md
-.claude/commands/task-handoff.md
+.claude/skills/task-create/SKILL.md
+.claude/skills/task-start/SKILL.md
+.claude/skills/task-handoff/SKILL.md
 .claude/hooks/check_sync.sh
 ```
 
@@ -63,9 +63,9 @@ git clone --depth 1 "$TEMPLATE_URL" "$TEMP_DIR"
 for f in \
   "docs/01_GUIDE/GUIDE_06_チーム開発ルール.md" \
   "docs/01_GUIDE/GUIDE_07_Issues・Projects運用ガイド.md" \
-  ".claude/commands/task-create.md" \
-  ".claude/commands/task-start.md" \
-  ".claude/commands/task-handoff.md" \
+  ".claude/skills/task-create/SKILL.md" \
+  ".claude/skills/task-start/SKILL.md" \
+  ".claude/skills/task-handoff/SKILL.md" \
   ".claude/hooks/check_sync.sh" ; do
   mkdir -p "$(dirname "$f")"
   cp "$TEMP_DIR/$f" "$f"
@@ -115,10 +115,13 @@ clone は不要（ローカルの削除・書き換えのみ）．**破壊的操
 rm -f \
   "docs/01_GUIDE/GUIDE_06_チーム開発ルール.md" \
   "docs/01_GUIDE/GUIDE_07_Issues・Projects運用ガイド.md" \
-  ".claude/commands/task-create.md" \
-  ".claude/commands/task-start.md" \
-  ".claude/commands/task-handoff.md" \
+  ".claude/skills/task-create/SKILL.md" \
+  ".claude/skills/task-start/SKILL.md" \
+  ".claude/skills/task-handoff/SKILL.md" \
   ".claude/hooks/check_sync.sh"
+
+# SKILL.md 削除で空になったスキルディレクトリを取り除く
+rmdir ".claude/skills/task-create" ".claude/skills/task-start" ".claude/skills/task-handoff" 2>/dev/null || true
 ```
 
 ### 3-B.2 settings.json から SessionStart(check_sync) を除去
