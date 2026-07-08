@@ -1,11 +1,15 @@
 """PreToolUse hook: リポジトリ外のファイルアクセスをブロックする.
 
 例外としてシステム一時ディレクトリ（/tmp・%TEMP% 等）は許可ゾーンとする:
-- Read/Glob/Grep: 一時ディレクトリ配下なら許可
-  （/sync-template・/set-mode がテンプレートを mktemp -d に clone して読むため）
+- Read/Write/Edit/Glob/Grep: 一時ディレクトリ配下なら許可
+  （/sync-template・/set-mode がテンプレートを mktemp -d に clone して読むため．
+   また Claude Code のスクラッチパッドは %TEMP% 配下にあり，Write をブロック
+   するとハーネスの一時ファイル運用が壊れる）
 - Bash の破壊的コマンド: 対象が一時ディレクトリ配下なら許可
   （cp "$TEMP_DIR/..." や rm -rf "$TEMP_DIR" の後片付けは正当な操作）
-- Write/Edit: 一時ディレクトリでもリポジトリ外は従来どおりブロック
+
+一時ディレクトリは使い捨て領域であり，本フックの目的（ユーザーのファイルを
+事故から守る）に照らして許可ゾーンにしても失うものがない．
 """
 
 import json
@@ -134,10 +138,10 @@ def main() -> None:
     if target_path is None:
         sys.exit(0)
 
-    # 読み取り専用ツールは一時ディレクトリ配下なら許可
-    # （/sync-template・/set-mode が mktemp -d に clone したテンプレートを読む）
-    # Write/Edit は一時ディレクトリでもブロックを維持する
-    if tool_name in ("Read", "Glob", "Grep") and is_temp_path(target_path):
+    # 一時ディレクトリ配下は許可（Read/Write/Edit/Glob/Grep すべて）
+    # （/sync-template・/set-mode が mktemp -d に clone したテンプレートを読む．
+    #   Claude Code のスクラッチパッドも %TEMP% 配下で Write が必要）
+    if is_temp_path(target_path):
         sys.exit(0)
 
     if not is_within_directory(target_path, cwd):
