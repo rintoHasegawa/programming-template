@@ -28,6 +28,46 @@ GUIDE_01（プロジェクト立ち上げフロー）を読み，各フェーズ
 3. CLAUDE.md の「開発進捗」と `docs/PROGRESS.md` を確認し，どのフェーズから再開するか判断する
 4. 初回の場合はフェーズ 1 から開始する
 
+## 開発モードの選択 (Development Mode)
+
+新規立ち上げ時（Pre-check で初期状態だった場合），フェーズ 1 に入る前に開発モードを 1 度だけ確定する．既に `.claude/project-mode` がある場合（再開時）はこのステップを飛ばす．
+
+ユーザーに次を確認する:
+
+「**このプロジェクトの開発モードを選んでください．**
+
+- **solo（個人開発）**: 1 人で開発する．進捗は `CLAUDE.md` の進捗欄＋ `docs/PROGRESS.md` で追う．
+- **team（チーム開発）**: 複数人が Claude Code で開発する．進捗・タスクは GitHub Issues と git 履歴で追い，直列運用・条件付きセルフマージ等のチームルール（GUIDE_06）を適用する．
+
+どちらにしますか？（後から `/set-mode <solo|team>` で切り替えられます）」
+
+確定したら以下を行う:
+
+1. `.claude/project-mode` にモード（`solo` または `team` のいずれか 1 語）を書き出す．
+2. **solo の場合**: チーム層ファイルが clone で配置されていれば削除し，solo プロジェクトを clean に保つ:
+   - `docs/01_GUIDE/GUIDE_06_チーム開発ルール.md`
+   - `docs/01_GUIDE/GUIDE_07_Issues・Projects運用ガイド.md`
+   - `.claude/commands/task-create.md` / `task-start.md` / `task-handoff.md`
+   - `.claude/hooks/check_sync.sh`
+   - ※ `.claude/settings.json` はそのまま（solo でも `restrict_repo_access.py` を使う）．SessionStart(check_sync) の配線は追加しない．
+3. **team の場合**: 上記チーム層ファイルを残す．加えて:
+   - `.claude/settings.json` に SessionStart フックを追記して `check_sync.sh` を配線する（既存の PreToolUse ブロックは保持する）:
+     ```json
+     "SessionStart": [
+       {
+         "hooks": [
+           { "type": "command", "command": "bash .claude/hooks/check_sync.sh", "timeout": 10 }
+         ]
+       }
+     ]
+     ```
+   - `.gitignore` に `.claude/settings.local.json` が無ければ追記する（個人設定用．GUIDE_06）．
+   - CLAUDE.md のチーム化は Phase 7 で行う（この時点ではまだ立ち上げ中で Issue/repo が無いため，進捗欄は setup 再開用にそのまま使う）．
+
+### 進捗記録（立ち上げ中）
+
+立ち上げ中は repo/Issue がまだ無いため，**モードに関わらず** setup 再開のための進捗は `CLAUDE.md` の進捗欄（最新 1 行）＋ `docs/PROGRESS.md` に記録する．team モードでの「進捗を Issue で追う」への切り替えは Phase 7（実装開始）以降に適用する．
+
 ## フェーズ 1〜6: 各フェーズの実行
 
 GUIDE_01 に定義された各フェーズを順番に実行する．
@@ -57,16 +97,29 @@ GUIDE_01 に定義された各フェーズを順番に実行する．
 ## フェーズ 7: 実装開始
 
 1. GUIDE_01 の「CLAUDE.md の管理」セクションに従い，CLAUDE.md を最終更新する
+   - **team モードの場合**（`.claude/project-mode` が `team`）は，ここで CLAUDE.md をチーム開発向けに変換する:
+     - 「開発進捗」節を，進捗欄（最新 1 行）ではなく **Issues ポインタ**に置き換える（例: 「進捗・タスクは GitHub Issues と git 履歴で追う（GUIDE_06）．現在のタスクは `gh issue list` で確認する．`CLAUDE.md` には進捗を書かない．」）．
+     - 「必須ルール（コード実装時）」に **「チーム開発（GUIDE_06 準拠）」小節**を追加する（直列運用・Issue ベースのタスク管理・`/task-create`／`/task-start`／`/task-handoff` の案内・条件付きセルフマージ・共有設定変更は専用 PR＋他メンバー 1 名 Approve 必須）．
+     - 「Git 運用」小節に，セッション開始時の `[sync-check]` 警告を必ず認識する旨の 1 行を追加する．
+     - 「ドキュメント」→「01_GUIDE」一覧に `GUIDE_06`・`GUIDE_07` の行を追加する．
+   - **solo モードの場合**は従来どおり（進捗欄＋ PROGRESS.md 運用）．
 2. 作成した全ドキュメントの一覧を表示する
 3. 最初の実装ステップを確認する
+4. **team モードの場合**は，AI に実施できない「管理者の初期設定」（GUIDE_06「管理者の初期設定」）をユーザーに案内する:
+   - GitHub リポジトリ作成・メンバー招待
+   - Issue テンプレートの用意
+   - CI 構築（未構築の間は GUIDE_06「CI 構築までの暫定ゲート」を適用）
+   - 依存脆弱性対策が必要ならスタックに応じた `.github/dependabot.yml` を追加（エコシステムはプロジェクト固有のため setup では作らない）
 
 「**全フェーズが完了しました．**
 
 作成したドキュメント:
 {ドキュメント一覧}
 
+開発モード: {solo / team}
 CLAUDE.md を更新しました．
-最初の実装ステップは `{ステップ名}` です．`/implement {タスク}` で開始できます．」
+最初の実装ステップは `{ステップ名}` です．`/implement {タスク}` で開始できます．
+{team の場合: 「チーム運用の管理者初期設定（GitHub repo・CI 等）は GUIDE_06 を参照してユーザー側で実施してください．」}」
 
 ## 中断時の処理
 

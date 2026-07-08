@@ -22,6 +22,7 @@ argument-hint: ""
 | `CLAUDE.md` | プロジェクト名・開発進捗・固有規約を保持する必要がある | テンプレートで変更された共通セクション（必須ルール，エージェントチーム，ドキュメント構成等）のみを Edit で更新．プロジェクト固有セクションは触らない |
 | `docs/PROGRESS.md` | プロジェクト固有の進捗ログを保持する必要がある | 既存ファイルがある場合は内容を上書きしない．テンプレート側の骨組み（タイトル・案内コメント）に差分があれば通知のみ行い手動マージを促す |
 | `.gitattributes` | プロジェクトによって設定が異なる可能性がある | 差分を表示し，ユーザーに「上書き / マージ / スキップ」を問う |
+| `.claude/settings.json` | team モードで SessionStart(check_sync) 配線を追加している等，プロジェクト固有の hook 設定を保持する必要がある | 既存の hooks を保持しつつ，テンプレート側で追加・変更された hook のみ統合．差分を表示しユーザーに確認 |
 
 マージ処理の対象は **既存ファイルが存在する場合のみ**．初回同期（`.claude/template-sync-sha` がない状態）では全ファイルが A 扱いとなるが，これらのファイルはフレームワーク初期化（`flutter create` / `npm init` 等）や `/init` で既にプロジェクトに存在するのが通常なので，そのままマージ処理に入る．既存ファイルがない稀なケースに限り通常の `cp` で配置する．
 
@@ -34,6 +35,27 @@ argument-hint: ""
 | `README.md` | テンプレートの README は GitHub の repo ページ向けのテンプレート紹介用．各プロジェクトは独自の README を持つべき | プロジェクト側にコピー・上書きしない．テンプレート側の追加・変更・削除も無視する |
 
 判定はステップ 5.3 のループ内でマージ必須ファイル判定より先に行う．
+
+## モード依存ファイル (Mode-gated / Team-layer Files)
+
+テンプレートは個人開発（solo）とチーム開発（team）の両モードを 1 つのリポジトリで提供する（GUIDE_06）．以下の**チーム層ファイル**は team モードのプロジェクトにのみ配置し，solo モードのプロジェクトには同期しない．
+
+| ファイル | レイヤ |
+| --- | --- |
+| `docs/01_GUIDE/GUIDE_06_チーム開発ルール.md` | team |
+| `docs/01_GUIDE/GUIDE_07_Issues・Projects運用ガイド.md` | team |
+| `.claude/commands/task-create.md` | team |
+| `.claude/commands/task-start.md` | team |
+| `.claude/commands/task-handoff.md` | team |
+| `.claude/hooks/check_sync.sh` | team |
+
+判定はプロジェクトの `.claude/project-mode`（`solo` または `team`．`/setup` が作成）で行う:
+
+- **`team`**: チーム層ファイルを通常どおり同期（A/M/D すべて反映）．
+- **`solo`**: チーム層ファイルを同期対象外ファイルと同様に**完全スキップ**（コピー・上書き・削除いずれもしない）．solo プロジェクトは `/setup` 時にこれらを削除済みのため，再配置しない．
+- **`.claude/project-mode` が存在しない**（本機能導入前に作られた既存プロジェクト）: 安全側に倒して **`solo` 扱い**とし，チーム層を配置しない．同期の最後に「チーム開発なら `.claude/project-mode` に `team` と記入し再同期してください」と案内する．
+
+なお `.claude/project-mode` 自体はテンプレートに含まれない（`/setup` が各プロジェクトで生成する）ため，同期で触れることはない．
 
 ## ステップ 1: 事前確認
 
@@ -132,8 +154,23 @@ diff -u .gitattributes "$TEMP_DIR/.gitattributes" | head -30
 以降の処理で利用する判定関数を定義する:
 
 ```bash
-MERGE_FILES=(".gitignore" "CLAUDE.md" "docs/PROGRESS.md" ".gitattributes")
+MERGE_FILES=(".gitignore" "CLAUDE.md" "docs/PROGRESS.md" ".gitattributes" ".claude/settings.json")
 SKIP_FILES=("README.md")
+TEAM_LAYER_FILES=(
+  "docs/01_GUIDE/GUIDE_06_チーム開発ルール.md"
+  "docs/01_GUIDE/GUIDE_07_Issues・Projects運用ガイド.md"
+  ".claude/commands/task-create.md"
+  ".claude/commands/task-start.md"
+  ".claude/commands/task-handoff.md"
+  ".claude/hooks/check_sync.sh"
+)
+
+# プロジェクトの開発モードを取得（未設定なら安全側で solo 扱い）
+if [ -f .claude/project-mode ]; then
+  PROJECT_MODE=$(tr -d '[:space:]' < .claude/project-mode)
+else
+  PROJECT_MODE="solo"
+fi
 
 is_merge_file() {
   local t="$1"
@@ -150,7 +187,17 @@ is_skip_file() {
   done
   return 1
 }
+
+is_team_layer_file() {
+  local t="$1"
+  for f in "${TEAM_LAYER_FILES[@]}"; do
+    [ "$f" = "$t" ] && return 0
+  done
+  return 1
+}
 ```
+
+`PROJECT_MODE` が `solo` の場合，チーム層ファイル（`is_team_layer_file` が真）は同期対象外ファイルと同様に完全スキップする（ステップ 5.3 のループでは `is_skip_file` 判定の直後に `[ "$PROJECT_MODE" = "solo" ] && is_team_layer_file "$file"` を追加で判定して `continue` する）．`team` の場合は通常のコピー／マージ判定に進む．
 
 ### 5.3 通常コピー対象の反映（マージ必須ファイル以外）
 
@@ -165,6 +212,10 @@ echo "$CHANGED_ENTRIES" | while IFS=$'\t' read -r status file newfile; do
       if is_skip_file "$file"; then
         continue
       fi
+      # solo モードではチーム層ファイルを完全スキップ（再配置しない）
+      if [ "$PROJECT_MODE" = "solo" ] && is_team_layer_file "$file"; then
+        continue
+      fi
       # マージ必須ファイルで既存ファイルがある場合は 5.4 で処理
       if is_merge_file "$file" && [ -f "$file" ]; then
         continue
@@ -175,6 +226,9 @@ echo "$CHANGED_ENTRIES" | while IFS=$'\t' read -r status file newfile; do
     R*)
       # file=旧パス, newfile=新パス
       if is_skip_file "$newfile"; then
+        continue
+      fi
+      if [ "$PROJECT_MODE" = "solo" ] && is_team_layer_file "$newfile"; then
         continue
       fi
       if is_merge_file "$newfile" && [ -f "$newfile" ]; then
@@ -250,6 +304,22 @@ done
    - **スキップ**: 既存ファイルを維持
 3. 選択に応じて処理する
 
+**`.claude/settings.json` のマージ手順**
+
+`settings.json` は hooks 設定を持つ．team モードのプロジェクトは PreToolUse（`restrict_repo_access.py`）に加えて SessionStart（`check_sync.sh`）を配線しているため，テンプレート版で盲目的に上書きするとプロジェクト固有の配線が失われる．同期担当エージェント（= あなた）が Read と Edit で JSON をマージする:
+
+1. 既存 `.claude/settings.json` とテンプレート版 `$TEMP_DIR/.claude/settings.json` を Read する
+2. 差分を表示する:
+   ```bash
+   diff -u .claude/settings.json "$TEMP_DIR/.claude/settings.json"
+   ```
+3. **既存の hooks を保持したまま**，テンプレート側で追加・変更された hook（イベント・matcher・command）のみを統合する:
+   - 既存に無いイベント／hook はテンプレート版から追加する
+   - プロジェクト固有の hook（team の SessionStart `check_sync.sh` 等）は残す
+   - 同一 hook の command 変更（例: `restrict_repo_access.py` の起動方法変更）はテンプレート版に合わせる
+   - solo モードで SessionStart(check_sync) が無い場合は，team 専用の配線を勝手に追加しない
+4. `git diff .claude/settings.json` で結果を表示しユーザーに確認する
+
 ### 5.5 削除候補の確認
 
 削除候補（D およびリネーム元）を抽出する:
@@ -257,6 +327,8 @@ done
 ```bash
 DELETIONS=$(echo "$CHANGED_ENTRIES" | awk -F'\t' '$1 == "D" {print $2} $1 ~ /^R/ {print $2}')
 ```
+
+solo モードではチーム層ファイルはそもそもプロジェクトに存在しないため，削除候補から除外する（`$PROJECT_MODE` が `solo` のとき `is_team_layer_file` が真のパスを `$DELETIONS` から取り除く）．
 
 `$DELETIONS` が空でない場合，ユーザーに確認を求める:
 
@@ -304,17 +376,25 @@ rm -rf "$TEMP_DIR"
 「**テンプレート同期が完了しました．**
 
 - ブランチ: `{ブランチ名}`
+- 開発モード: `{PROJECT_MODE}`（チーム層ファイルは {team: 同期対象 / solo: スキップ}）
 - 取り込んだ変更: {変更の要約}
 - コード修正: {あり（内容）/なし}
 
 `/commit push` でプッシュと PR 作成ができます．」
 
+`.claude/project-mode` が存在せず `solo` 扱いにした場合は，末尾に次を添える:
+
+「※ `.claude/project-mode` が未設定のため solo として同期しました．チーム開発にする場合は `/set-mode team` を実行してください（`.claude/project-mode` を手で書き換えるだけでは team 層は配置されません）．」
+
 ## 注意事項
 
+- 本コマンドは一時ディレクトリ（`mktemp -d`）に clone したテンプレートを Read / `cp` / `rm -rf` する．`restrict_repo_access.py` フックはシステム一時ディレクトリを許可ゾーンとして例外扱いしており，本コマンドはそれに依存している（フックの例外を外すと本コマンドが動かなくなる）
 - テンプレートリポジトリへの push は行わない
 - コード修正はユーザーの確認なしに実行しない
 - マージ必須ファイル（`.gitignore`, `CLAUDE.md`, `docs/PROGRESS.md`, `.gitattributes`）は必ずステップ 5.4 の手順でマージする．盲目的な `cp` で上書きしない（フレームワーク固有の除外ルールやプロジェクト固有セクションが失われる）
 - 同期対象外ファイル（`README.md`）はテンプレート紹介用のためプロジェクトには反映しない．テンプレート側で追加・変更・削除があってもプロジェクトの該当ファイルは触らない
+- チーム層ファイル（`GUIDE_06`／`GUIDE_07`／`task-*`／`check_sync.sh`）は `.claude/project-mode` が `team` のプロジェクトにのみ同期する．`solo`（または未設定）のプロジェクトには配置・更新・削除いずれもしない．`/sync-template` は「版の追従」のみを行い，**モードの切り替えはしない**．solo↔team の切替は `/set-mode <solo|team>` を使う（team 層ファイルの配置／削除・`settings.json` 配線・`CLAUDE.md` の team 化／solo 化・`project-mode` 更新を一括で行う）．`.claude/project-mode` を手で書き換えるだけでは切り替わらない
+- `.claude/settings.json` はマージ必須ファイル．team の SessionStart(check_sync) 配線を保持したままテンプレートの hook 変更を統合する．盲目的な `cp` で上書きしない
 - 通常コピー対象でもプロジェクト固有の変更が上書きされうる場合は，`git diff` で確認してユーザーに報告する
 - テンプレートが管理するのは `.claude/` 配下のうち `agents/`，`commands/`，`hooks/`，`settings.json`，`template-sync-sha` のみ．`.claude/plans/` や `.claude/commit-context.md` 等のプロジェクト固有ファイルはテンプレートに含まれないため同期対象外
 - `chore/sync-template` ブランチは他の作業ブランチと混ぜず，作成後は速やかにマージすること．複数の作業ブランチで `/sync-template` を実行すると `.claude/template-sync-sha` がコンフリクトする．コンフリクト時は新しい（HEAD 側の）SHA を採用すること．
