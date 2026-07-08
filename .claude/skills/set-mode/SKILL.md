@@ -137,7 +137,7 @@ rmdir ".claude/skills/task-create" ".claude/skills/task-start" ".claude/skills/t
   ## 開発進捗
 
   最新: <直近の状況を 1 行．不明なら「（git 履歴 / 旧 Issue を参照）」>
-  ※ 本欄は**最新ステップ 1 行のみ上書き更新**．詳細な進捗履歴は docs/PROGRESS.md に追記する．運用ルールは GUIDE_05 参照．
+  ※ 本欄は**最新ステップ 1 行のみ上書き更新**．詳細な進捗履歴は docs/PROGRESS.md に追記する．運用ルールは .claude/rules/progress-log.md 参照．
   ```
   「最新」行に入れる現状はユーザーに確認する（team 期間の進捗は Issues / git 履歴にあるため，ここへ移し替える必要はない）．
 - **「チーム開発（GUIDE_06 準拠）」小節を削除**する．

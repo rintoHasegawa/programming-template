@@ -48,9 +48,9 @@ rm README.md
 `docs/01_GUIDE/` にプロジェクト運用の規約・ルールが置かれている．`/setup` を実行すれば AI がこれらを順次参照しながら立ち上げを進める．
 
 - `GUIDE_01_プロジェクト立ち上げフロー.md` — 立ち上げの 7 フェーズ（方針決定 → 実装開始）
-- `GUIDE_02_ドキュメント作成ガイド.md` — 設計ドキュメントの書き方
-- `GUIDE_03_ファイル命名規則.md` — ファイル名の規則
 - `GUIDE_04_Git運用ルール.md` — ブランチ・コミット・PR の運用
 - `GUIDE_05_エージェント運用ルール.md` — `/implement` のエージェントチーム運用
 - `GUIDE_06_チーム開発ルール.md` — **team モードのみ**．直列運用・条件付きセルフマージ・共有設定の扱い
 - `GUIDE_07_Issues・Projects運用ガイド.md` — **team モードのみ**．`gh` による Issue/Project 操作手順
+
+ドキュメントの書式・ファイル命名・進捗記録のルールは `.claude/rules/`（`markdown-style` / `docs-naming` / `progress-log`）にあり，該当ファイルの編集時に Claude へ自動ロードされる．

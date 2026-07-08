@@ -396,5 +396,5 @@ rm -rf "$TEMP_DIR"
 - チーム層ファイル（`GUIDE_06`／`GUIDE_07`／`task-*`／`check_sync.sh`）は `.claude/project-mode` が `team` のプロジェクトにのみ同期する．`solo`（または未設定）のプロジェクトには配置・更新・削除いずれもしない．`/sync-template` は「版の追従」のみを行い，**モードの切り替えはしない**．solo↔team の切替は `/set-mode <solo|team>` を使う（team 層ファイルの配置／削除・`settings.json` 配線・`CLAUDE.md` の team 化／solo 化・`project-mode` 更新を一括で行う）．`.claude/project-mode` を手で書き換えるだけでは切り替わらない
 - `.claude/settings.json` はマージ必須ファイル．team の SessionStart(check_sync) 配線を保持したままテンプレートの hook 変更を統合する．盲目的な `cp` で上書きしない
 - 通常コピー対象でもプロジェクト固有の変更が上書きされうる場合は，`git diff` で確認してユーザーに報告する
-- テンプレートが管理するのは `.claude/` 配下のうち `agents/`，`skills/`，`hooks/`，`settings.json`，`template-sync-sha` のみ．`.claude/plans/` や `.claude/commit-context.md` 等のプロジェクト固有ファイルはテンプレートに含まれないため同期対象外
+- テンプレートが管理するのは `.claude/` 配下のうち `agents/`，`skills/`，`rules/`，`hooks/`，`settings.json`，`template-sync-sha` のみ．`.claude/plans/` や `.claude/commit-context.md` 等のプロジェクト固有ファイルはテンプレートに含まれないため同期対象外
 - `chore/sync-template` ブランチは他の作業ブランチと混ぜず，作成後は速やかにマージすること．複数の作業ブランチで `/sync-template` を実行すると `.claude/template-sync-sha` がコンフリクトする．コンフリクト時は新しい（HEAD 側の）SHA を採用すること．

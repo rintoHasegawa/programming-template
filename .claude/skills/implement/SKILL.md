@@ -75,7 +75,7 @@ Refactorer の出力（リファクタリングサマリー）を記録し，確
 
 ## Phase 4: ドキュメント更新 (Documentation)
 
-GUIDE_05 の「Phase 4: ドキュメント更新」に記載されたチェック観点に従い，`docs/`, `CLAUDE.md`, `docs/PROGRESS.md` を必要に応じて更新する．進捗を記録する場合は GUIDE_05「進捗記録の運用ルール（CLAUDE.md / PROGRESS.md）」に従う（CLAUDE.md は最新 1 行に上書き，`docs/PROGRESS.md` に詳細を末尾追記．`git log` で取れる詳細は書かない）．
+GUIDE_05 の「Phase 4: ドキュメント更新」に記載されたチェック観点に従い，`docs/`, `CLAUDE.md`, `docs/PROGRESS.md` を必要に応じて更新する．進捗を記録する場合は進捗記録ルール `.claude/rules/progress-log.md` に従う（CLAUDE.md は最新 1 行に上書き，`docs/PROGRESS.md` に詳細を末尾追記．`git log` で取れる詳細は書かない）．
 
 Phase 4 の結果を `.claude/commit-context.md` に書き出す:
 

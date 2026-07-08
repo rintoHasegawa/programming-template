@@ -5,7 +5,7 @@
 ## 開発進捗
 
 最新: GUIDE_01 に従いプロジェクト立ち上げ中
-※ 本欄は**最新ステップ 1 行のみ上書き更新**．詳細な進捗履歴（動機・設計判断・失敗パターン）は [docs/PROGRESS.md](docs/PROGRESS.md) に追記する．運用ルールは GUIDE_05「進捗記録の運用ルール（CLAUDE.md / PROGRESS.md）」を参照．
+※ 本欄は**最新ステップ 1 行のみ上書き更新**．詳細な進捗履歴（動機・設計判断・失敗パターン）は [docs/PROGRESS.md](docs/PROGRESS.md) に追記する．運用ルールは `.claude/rules/progress-log.md` を参照（該当ファイル編集時に自動ロードされる）．
 
 ## 必須ルール（コード実装時）
 
@@ -43,10 +43,9 @@
 ### 01_GUIDE（規約・ルール）
 
 - プロジェクト立ち上げフロー: docs/01_GUIDE/GUIDE_01_プロジェクト立ち上げフロー.md
-- ドキュメント作成規約: docs/01_GUIDE/GUIDE_02_ドキュメント作成ガイド.md
-- ファイル命名規則: docs/01_GUIDE/GUIDE_03_ファイル命名規則.md
 - Git 運用ルール: docs/01_GUIDE/GUIDE_04_Git運用ルール.md
 - エージェント運用ルール: docs/01_GUIDE/GUIDE_05_エージェント運用ルール.md
+- ※ ドキュメント書式・命名規則・進捗記録は `.claude/rules/`（markdown-style / docs-naming / progress-log）に定義されており，該当ファイルの編集時に自動ロードされる
 - ※ コーディング規約，テスト方針等はプロジェクト立ち上げ時に作成する（GUIDE_01 参照）
 
 ### 02_ENV（環境）
