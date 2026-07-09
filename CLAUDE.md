@@ -9,7 +9,7 @@
 
 ## 必須ルール（コード実装時）
 
-<!-- プロジェクト立ち上げ後，規約整備フェーズで追加する -->
+<!-- プロジェクト固有の必須ルールの要点があればここに追記する．コーディング規約等の本体は規約整備フェーズで .claude/rules/ に path-scoped rule として作成する（GUIDE_01 参照） -->
 
 ### Git 運用
 
@@ -45,7 +45,7 @@
 - プロジェクト立ち上げフロー: docs/01_GUIDE/GUIDE_01_プロジェクト立ち上げフロー.md
 - エージェント運用ルール: docs/01_GUIDE/GUIDE_05_エージェント運用ルール.md
 - ※ Git 規約・ドキュメント書式・命名規則・進捗記録は `.claude/rules/`（git-conventions / markdown-style / docs-naming / progress-log）に定義されている（git-conventions は常時，他は該当ファイル編集時に自動ロード）
-- ※ コーディング規約，テスト方針等はプロジェクト立ち上げ時に作成する（GUIDE_01 参照）
+- ※ コーディング規約，テスト方針等はプロジェクト立ち上げ時に path-scoped rules（`.claude/rules/`）として作成する（GUIDE_01 参照）
 
 ### 02_ENV（環境）
 
