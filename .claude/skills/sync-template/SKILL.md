@@ -109,7 +109,7 @@ CHANGED_ENTRIES=$(cd "$TEMP_DIR" && find . -type f -not -path "./.git/*" | sed '
 
 ## ステップ 4: 変更一覧をユーザーに提示
 
-取り込み対象のファイル一覧を種別ごとに整理してユーザーに提示する．マージ必須ファイル（`.gitignore`, `CLAUDE.md`, `docs/PROGRESS.md`, `.gitattributes`）に変更がある場合は，**ユーザーが取り込み前に影響範囲を把握できるよう差分サマリーを先出しする**:
+取り込み対象のファイル一覧を種別ごとに整理してユーザーに提示する．マージ必須ファイル（`.gitignore`, `CLAUDE.md`, `docs/PROGRESS.md`, `.gitattributes`, `.claude/settings.json`）に変更がある場合は，**ユーザーが取り込み前に影響範囲を把握できるよう差分サマリーを先出しする**:
 
 「**テンプレートに以下の変更があります:**
 
@@ -124,6 +124,7 @@ CHANGED_ENTRIES=$(cd "$TEMP_DIR" && find . -type f -not -path "./.git/*" | sed '
 - `CLAUDE.md`（既存にプロジェクト固有セクションが {L} 行．テンプレート更新セクションのみマージ）
 - `docs/PROGRESS.md`（プロジェクト固有の進捗ログ．既存があれば内容を保持し，差分があれば通知のみ）
 - `.gitattributes`（差分 {D} 行．処理方針をユーザーに確認）
+- `.claude/settings.json`（既存の hooks を保持し，テンプレート側で追加・変更された hook のみ統合）
 
 取り込みを開始します．」
 
@@ -131,7 +132,7 @@ CHANGED_ENTRIES=$(cd "$TEMP_DIR" && find . -type f -not -path "./.git/*" | sed '
 
 ```bash
 # 既存ファイル行数
-wc -l .gitignore CLAUDE.md docs/PROGRESS.md .gitattributes 2>/dev/null
+wc -l .gitignore CLAUDE.md docs/PROGRESS.md .gitattributes .claude/settings.json 2>/dev/null
 
 # テンプレート側の実効行数（.gitignore）
 grep -vE '^\s*(#|$)' "$TEMP_DIR/.gitignore" | wc -l
@@ -141,6 +142,7 @@ diff -u .gitignore "$TEMP_DIR/.gitignore" | head -30
 diff -u CLAUDE.md "$TEMP_DIR/CLAUDE.md" | head -50
 diff -u docs/PROGRESS.md "$TEMP_DIR/docs/PROGRESS.md" | head -30
 diff -u .gitattributes "$TEMP_DIR/.gitattributes" | head -30
+diff -u .claude/settings.json "$TEMP_DIR/.claude/settings.json" | head -30
 ```
 
 ## ステップ 5: ブランチ作成とファイル反映
@@ -391,7 +393,7 @@ rm -rf "$TEMP_DIR"
 - 本コマンドは一時ディレクトリ（`mktemp -d`）に clone したテンプレートを Read / `cp` / `rm -rf` する．`restrict_repo_access.py` フックはシステム一時ディレクトリを許可ゾーンとして例外扱いしており，本コマンドはそれに依存している（フックの例外を外すと本コマンドが動かなくなる）
 - テンプレートリポジトリへの push は行わない
 - コード修正はユーザーの確認なしに実行しない
-- マージ必須ファイル（`.gitignore`, `CLAUDE.md`, `docs/PROGRESS.md`, `.gitattributes`）は必ずステップ 5.4 の手順でマージする．盲目的な `cp` で上書きしない（フレームワーク固有の除外ルールやプロジェクト固有セクションが失われる）
+- マージ必須ファイル（`.gitignore`, `CLAUDE.md`, `docs/PROGRESS.md`, `.gitattributes`, `.claude/settings.json`）は必ずステップ 5.4 の手順でマージする．盲目的な `cp` で上書きしない（フレームワーク固有の除外ルールやプロジェクト固有セクションが失われる）
 - 同期対象外ファイル（`README.md`）はテンプレート紹介用のためプロジェクトには反映しない．テンプレート側で追加・変更・削除があってもプロジェクトの該当ファイルは触らない
 - チーム層ファイル（`GUIDE_06`／`GUIDE_07`／`task-*`／`check_sync.sh`）は `.claude/project-mode` が `team` のプロジェクトにのみ同期する．`solo`（または未設定）のプロジェクトには配置・更新・削除いずれもしない．`/sync-template` は「版の追従」のみを行い，**モードの切り替えはしない**．solo↔team の切替は `/set-mode <solo|team>` を使う（team 層ファイルの配置／削除・`settings.json` 配線・`CLAUDE.md` の team 化／solo 化・`project-mode` 更新を一括で行う）．`.claude/project-mode` を手で書き換えるだけでは切り替わらない
 - `.claude/settings.json` はマージ必須ファイル．team の SessionStart(check_sync) 配線を保持したままテンプレートの hook 変更を統合する．盲目的な `cp` で上書きしない
