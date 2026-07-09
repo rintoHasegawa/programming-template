@@ -17,6 +17,18 @@
 
 ※ 立ち上げフローで作成するのは `02_ENV / 03_PLAN / 04_SPEC` カテゴリの成果物と，規約整備フェーズの `.claude/rules/*.md` のみ．`05_TECH`（技術設計）・`06_TEST`（テスト）は実装フェーズで必要になった時点で作成し，立ち上げ時に空フォルダを作らない．
 
+## 開発モードとファイル構成 (Development Modes & File Layout)
+
+プロジェクトは個人開発（solo）とチーム開発（team）の 2 モードで運用できる．モードは `/setup` の冒頭で選択し，`.claude/project-mode` に記録される（後からの切り替えは `/set-mode <solo|team>`）．
+
+| レイヤ | 対象 | 存在するモード |
+| --- | --- | --- |
+| 共通層 | `GUIDE_01`・`GUIDE_02`，`.claude/rules/` のすべて，`.claude/agents/`，skills（`commit`・`implement`・`setup`・`sync-template`・`set-mode`・`auto-refactor`・`auto-audit`） | solo・team 両方 |
+| team 層 | `GUIDE_03`，skills（`task-create`・`task-start`（+ `reference.md`）・`task-handoff`），`.claude/hooks/check_sync.sh`，`settings.json` の SessionStart 配線 | team のみ |
+
+- `.claude/rules/` はすべて共通層だが，進捗記録ルール（`progress-log`）だけは team モードで運用上**上書き**される（進捗は `CLAUDE.md`／`docs/PROGRESS.md` ではなく GitHub Issues と git 履歴で追う．GUIDE_03）．
+- team 層ファイルの配置・削除は `/set-mode` が一括で行い，`/sync-template` は `.claude/project-mode` を見て team 層の同期可否を判定する．team 層ファイルの正確なリストは `/set-mode`・`/sync-template` の定義に持たせており，増減時は両者を一致させること．
+
 ## 方針決定 (Direction)
 
 プロジェクトの全体像を明確にする．
