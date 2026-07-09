@@ -1,6 +1,10 @@
+---
+paths: ["**/*.md"]
+---
+
 # ドキュメント作成ガイドライン (Documentation Style Guide)
 
-本ガイドはプロジェクト内のマークダウンドキュメントの書式を統一するためのルールを定める．
+本ルールはプロジェクト内のマークダウンドキュメントの書式を統一するためのルールを定める．Markdown ファイルを作成・編集するときは必ず従うこと．
 基本方針として [Google Markdown Style Guide](https://google.github.io/styleguide/docguide/style.html) および [markdownlint](https://github.com/DavidAnson/markdownlint/blob/main/doc/Rules.md) のルールに準拠し，本ガイドで上書きする項目のみ以下に記載する．
 
 ## 基本フォーマット (Basic Format)

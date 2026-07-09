@@ -5,22 +5,22 @@
 ## 開発進捗
 
 最新: GUIDE_01 に従いプロジェクト立ち上げ中
-※ 本欄は**最新ステップ 1 行のみ上書き更新**．詳細な進捗履歴（動機・設計判断・失敗パターン）は [docs/PROGRESS.md](docs/PROGRESS.md) に追記する．運用ルールは GUIDE_05「進捗記録の運用ルール（CLAUDE.md / PROGRESS.md）」を参照．
+※ 本欄は**最新ステップ 1 行のみ上書き更新**．詳細な進捗履歴（動機・設計判断・失敗パターン）は [docs/PROGRESS.md](docs/PROGRESS.md) に追記する．運用ルールは `.claude/rules/progress-log.md` を参照（該当ファイル編集時に自動ロードされる）．
 
 ## 必須ルール（コード実装時）
 
-<!-- プロジェクト立ち上げ後，規約整備フェーズで追加する -->
+<!-- プロジェクト固有の必須ルールの要点があればここに追記する．コーディング規約等の本体は規約整備フェーズで .claude/rules/ に path-scoped rule として作成する（GUIDE_01 参照） -->
 
-### Git 運用（GUIDE_04 準拠）
+### Git 運用
 
-- ブランチ名・コミットメッセージの書式は GUIDE_04 に従う
+- ブランチ名・コミットメッセージの書式は `.claude/rules/git-conventions.md` に従う（常時ロードされる）
 - コミットは `/commit` を使用する（push・PR 作成は `/commit push`）
-- **`/commit` はユーザーが明示的に指示した時のみ実行する．Claude が自発的に `/commit` や `git commit` を呼んではならない**（`/implement` 完了後も，案内するだけで自分ではコミットしない）
+- **`/commit` はユーザーが明示的に指示した時のみ実行する．Claude が自発的に `/commit` や `git commit` を呼んではならない**（`/implement` 完了後も，案内するだけで自分ではコミットしない．`/commit` skill は `disable-model-invocation` によりユーザー起動限定として強制されている）
   - **例外**: 以下の無人運転ループはユーザー承認済みの例外として専用ブランチに自律コミットする．いずれも push・PR・マージ・`main` への操作はしない（取り込みは人間が `/commit push` 等で行う）
     - `/auto-refactor`（リファクタ／ドキュメント整理ループ）→ `refactor/` 専用ブランチ
     - `/auto-audit`（バグ／脆弱性の巡回監査ループ）→ `fix/` 専用ブランチ
 
-### エージェントチーム（GUIDE_05 準拠）
+### エージェントチーム（GUIDE_02 準拠）
 
 - 実装は `/implement <タスク>` で開始する（コーディング → テスト → リファクタリング → ドキュメント更新）
 - Phase 1 後に人間が動作確認，Phase 2 でテスト失敗時のみ方針判断
@@ -43,11 +43,9 @@
 ### 01_GUIDE（規約・ルール）
 
 - プロジェクト立ち上げフロー: docs/01_GUIDE/GUIDE_01_プロジェクト立ち上げフロー.md
-- ドキュメント作成規約: docs/01_GUIDE/GUIDE_02_ドキュメント作成ガイド.md
-- ファイル命名規則: docs/01_GUIDE/GUIDE_03_ファイル命名規則.md
-- Git 運用ルール: docs/01_GUIDE/GUIDE_04_Git運用ルール.md
-- エージェント運用ルール: docs/01_GUIDE/GUIDE_05_エージェント運用ルール.md
-- ※ コーディング規約，テスト方針等はプロジェクト立ち上げ時に作成する（GUIDE_01 参照）
+- エージェント運用ルール: docs/01_GUIDE/GUIDE_02_エージェント運用ルール.md
+- ※ Git 規約・ドキュメント書式・命名規則・進捗記録は `.claude/rules/`（git-conventions / markdown-style / docs-naming / progress-log）に定義されている（git-conventions は常時，他は該当ファイル編集時に自動ロード）
+- ※ コーディング規約，テスト方針等はプロジェクト立ち上げ時に path-scoped rules（`.claude/rules/`）として作成する（GUIDE_01 参照）
 
 ### 02_ENV（環境）
 

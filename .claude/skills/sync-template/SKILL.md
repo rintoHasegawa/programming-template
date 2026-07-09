@@ -38,15 +38,15 @@ argument-hint: ""
 
 ## モード依存ファイル (Mode-gated / Team-layer Files)
 
-テンプレートは個人開発（solo）とチーム開発（team）の両モードを 1 つのリポジトリで提供する（GUIDE_06）．以下の**チーム層ファイル**は team モードのプロジェクトにのみ配置し，solo モードのプロジェクトには同期しない．
+テンプレートは個人開発（solo）とチーム開発（team）の両モードを 1 つのリポジトリで提供する（GUIDE_03）．以下の**チーム層ファイル**は team モードのプロジェクトにのみ配置し，solo モードのプロジェクトには同期しない．
 
 | ファイル | レイヤ |
 | --- | --- |
-| `docs/01_GUIDE/GUIDE_06_チーム開発ルール.md` | team |
-| `docs/01_GUIDE/GUIDE_07_Issues・Projects運用ガイド.md` | team |
-| `.claude/commands/task-create.md` | team |
-| `.claude/commands/task-start.md` | team |
-| `.claude/commands/task-handoff.md` | team |
+| `docs/01_GUIDE/GUIDE_03_チーム開発ルール.md` | team |
+| `.claude/skills/task-create/SKILL.md` | team |
+| `.claude/skills/task-start/SKILL.md` | team |
+| `.claude/skills/task-start/reference.md` | team |
+| `.claude/skills/task-handoff/SKILL.md` | team |
 | `.claude/hooks/check_sync.sh` | team |
 
 判定はプロジェクトの `.claude/project-mode`（`solo` または `team`．`/setup` が作成）で行う:
@@ -109,7 +109,7 @@ CHANGED_ENTRIES=$(cd "$TEMP_DIR" && find . -type f -not -path "./.git/*" | sed '
 
 ## ステップ 4: 変更一覧をユーザーに提示
 
-取り込み対象のファイル一覧を種別ごとに整理してユーザーに提示する．マージ必須ファイル（`.gitignore`, `CLAUDE.md`, `docs/PROGRESS.md`, `.gitattributes`）に変更がある場合は，**ユーザーが取り込み前に影響範囲を把握できるよう差分サマリーを先出しする**:
+取り込み対象のファイル一覧を種別ごとに整理してユーザーに提示する．マージ必須ファイル（`.gitignore`, `CLAUDE.md`, `docs/PROGRESS.md`, `.gitattributes`, `.claude/settings.json`）に変更がある場合は，**ユーザーが取り込み前に影響範囲を把握できるよう差分サマリーを先出しする**:
 
 「**テンプレートに以下の変更があります:**
 
@@ -124,6 +124,7 @@ CHANGED_ENTRIES=$(cd "$TEMP_DIR" && find . -type f -not -path "./.git/*" | sed '
 - `CLAUDE.md`（既存にプロジェクト固有セクションが {L} 行．テンプレート更新セクションのみマージ）
 - `docs/PROGRESS.md`（プロジェクト固有の進捗ログ．既存があれば内容を保持し，差分があれば通知のみ）
 - `.gitattributes`（差分 {D} 行．処理方針をユーザーに確認）
+- `.claude/settings.json`（既存の hooks を保持し，テンプレート側で追加・変更された hook のみ統合）
 
 取り込みを開始します．」
 
@@ -131,7 +132,7 @@ CHANGED_ENTRIES=$(cd "$TEMP_DIR" && find . -type f -not -path "./.git/*" | sed '
 
 ```bash
 # 既存ファイル行数
-wc -l .gitignore CLAUDE.md docs/PROGRESS.md .gitattributes 2>/dev/null
+wc -l .gitignore CLAUDE.md docs/PROGRESS.md .gitattributes .claude/settings.json 2>/dev/null
 
 # テンプレート側の実効行数（.gitignore）
 grep -vE '^\s*(#|$)' "$TEMP_DIR/.gitignore" | wc -l
@@ -141,6 +142,7 @@ diff -u .gitignore "$TEMP_DIR/.gitignore" | head -30
 diff -u CLAUDE.md "$TEMP_DIR/CLAUDE.md" | head -50
 diff -u docs/PROGRESS.md "$TEMP_DIR/docs/PROGRESS.md" | head -30
 diff -u .gitattributes "$TEMP_DIR/.gitattributes" | head -30
+diff -u .claude/settings.json "$TEMP_DIR/.claude/settings.json" | head -30
 ```
 
 ## ステップ 5: ブランチ作成とファイル反映
@@ -157,11 +159,11 @@ diff -u .gitattributes "$TEMP_DIR/.gitattributes" | head -30
 MERGE_FILES=(".gitignore" "CLAUDE.md" "docs/PROGRESS.md" ".gitattributes" ".claude/settings.json")
 SKIP_FILES=("README.md")
 TEAM_LAYER_FILES=(
-  "docs/01_GUIDE/GUIDE_06_チーム開発ルール.md"
-  "docs/01_GUIDE/GUIDE_07_Issues・Projects運用ガイド.md"
-  ".claude/commands/task-create.md"
-  ".claude/commands/task-start.md"
-  ".claude/commands/task-handoff.md"
+  "docs/01_GUIDE/GUIDE_03_チーム開発ルール.md"
+  ".claude/skills/task-create/SKILL.md"
+  ".claude/skills/task-start/SKILL.md"
+  ".claude/skills/task-start/reference.md"
+  ".claude/skills/task-handoff/SKILL.md"
   ".claude/hooks/check_sync.sh"
 )
 
@@ -322,13 +324,18 @@ done
 
 ### 5.5 削除候補の確認
 
-削除候補（D およびリネーム元）を抽出する:
+削除候補（D およびリネーム元）を抽出し，**ローカルに実在するファイルだけ**に絞る:
 
 ```bash
 DELETIONS=$(echo "$CHANGED_ENTRIES" | awk -F'\t' '$1 == "D" {print $2} $1 ~ /^R/ {print $2}')
+
+# ローカルに実在するファイルのみを削除候補に残す
+DELETIONS=$(echo "$DELETIONS" | while IFS= read -r f; do
+  [ -n "$f" ] && [ -f "$f" ] && echo "$f"
+done)
 ```
 
-solo モードではチーム層ファイルはそもそもプロジェクトに存在しないため，削除候補から除外する（`$PROJECT_MODE` が `solo` のとき `is_team_layer_file` が真のパスを `$DELETIONS` から取り除く）．
+この実在フィルタにより，テンプレート側のリネームや過去の移行でプロジェクトが持っていない旧パス，solo モードに配置されないチーム層ファイルは，削除確認に出ることなく自動的に除外される．
 
 `$DELETIONS` が空でない場合，ユーザーに確認を求める:
 
@@ -351,7 +358,7 @@ rm -rf "$TEMP_DIR"
 
 コピーされた変更を以下のカテゴリに分類する:
 
-- **ルール変更**: コーディング規約，Git 運用ルール，テスト方針等の変更
+- **ルール変更**: コーディング規約，Git 運用ルール，テスト方針等の変更（`.claude/rules/` 配下の変更を含む）
 - **ドキュメント更新**: 手順書やガイドの改善
 - **設定変更**: CLAUDE.md や .claude/ 配下の変更
 - **その他**: 上記に該当しない変更
@@ -391,10 +398,10 @@ rm -rf "$TEMP_DIR"
 - 本コマンドは一時ディレクトリ（`mktemp -d`）に clone したテンプレートを Read / `cp` / `rm -rf` する．`restrict_repo_access.py` フックはシステム一時ディレクトリを許可ゾーンとして例外扱いしており，本コマンドはそれに依存している（フックの例外を外すと本コマンドが動かなくなる）
 - テンプレートリポジトリへの push は行わない
 - コード修正はユーザーの確認なしに実行しない
-- マージ必須ファイル（`.gitignore`, `CLAUDE.md`, `docs/PROGRESS.md`, `.gitattributes`）は必ずステップ 5.4 の手順でマージする．盲目的な `cp` で上書きしない（フレームワーク固有の除外ルールやプロジェクト固有セクションが失われる）
+- マージ必須ファイル（`.gitignore`, `CLAUDE.md`, `docs/PROGRESS.md`, `.gitattributes`, `.claude/settings.json`）は必ずステップ 5.4 の手順でマージする．盲目的な `cp` で上書きしない（フレームワーク固有の除外ルールやプロジェクト固有セクションが失われる）
 - 同期対象外ファイル（`README.md`）はテンプレート紹介用のためプロジェクトには反映しない．テンプレート側で追加・変更・削除があってもプロジェクトの該当ファイルは触らない
-- チーム層ファイル（`GUIDE_06`／`GUIDE_07`／`task-*`／`check_sync.sh`）は `.claude/project-mode` が `team` のプロジェクトにのみ同期する．`solo`（または未設定）のプロジェクトには配置・更新・削除いずれもしない．`/sync-template` は「版の追従」のみを行い，**モードの切り替えはしない**．solo↔team の切替は `/set-mode <solo|team>` を使う（team 層ファイルの配置／削除・`settings.json` 配線・`CLAUDE.md` の team 化／solo 化・`project-mode` 更新を一括で行う）．`.claude/project-mode` を手で書き換えるだけでは切り替わらない
+- チーム層ファイル（`GUIDE_03`／`task-*`／`check_sync.sh`）は `.claude/project-mode` が `team` のプロジェクトにのみ同期する．`solo`（または未設定）のプロジェクトには配置・更新・削除いずれもしない．`/sync-template` は「版の追従」のみを行い，**モードの切り替えはしない**．solo↔team の切替は `/set-mode <solo|team>` を使う（team 層ファイルの配置／削除・`settings.json` 配線・`CLAUDE.md` の team 化／solo 化・`project-mode` 更新を一括で行う）．`.claude/project-mode` を手で書き換えるだけでは切り替わらない
 - `.claude/settings.json` はマージ必須ファイル．team の SessionStart(check_sync) 配線を保持したままテンプレートの hook 変更を統合する．盲目的な `cp` で上書きしない
 - 通常コピー対象でもプロジェクト固有の変更が上書きされうる場合は，`git diff` で確認してユーザーに報告する
-- テンプレートが管理するのは `.claude/` 配下のうち `agents/`，`commands/`，`hooks/`，`settings.json`，`template-sync-sha` のみ．`.claude/plans/` や `.claude/commit-context.md` 等のプロジェクト固有ファイルはテンプレートに含まれないため同期対象外
+- テンプレートが管理するのは `.claude/` 配下のうち `agents/`，`skills/`，`rules/`，`hooks/`，`settings.json`，`template-sync-sha` のみ．`.claude/plans/` や `.claude/commit-context.md` 等のプロジェクト固有ファイルはテンプレートに含まれないため同期対象外
 - `chore/sync-template` ブランチは他の作業ブランチと混ぜず，作成後は速やかにマージすること．複数の作業ブランチで `/sync-template` を実行すると `.claude/template-sync-sha` がコンフリクトする．コンフリクト時は新しい（HEAD 側の）SHA を採用すること．

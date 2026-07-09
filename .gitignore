@@ -1,4 +1,4 @@
-# 個人・マシン固有の Claude 設定（共有 settings.json を汚さない．GUIDE_06）
+# 個人・マシン固有の Claude 設定（共有 settings.json を汚さない．GUIDE_03）
 .claude/settings.local.json
 
 # /implement が /commit に渡すコンテキストファイル
@@ -14,7 +14,7 @@
 .claude/auto-audit-fixed.md
 .claude/auto-audit-skip.md
 
-# -- プロジェクト立ち上げ時に有効化する（GUIDE_04 参照） --
+# -- プロジェクト立ち上げ時に有効化する（.claude/rules/git-conventions.md 参照） --
 # .env
 # .env.*
 # node_modules/

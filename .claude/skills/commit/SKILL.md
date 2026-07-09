@@ -1,11 +1,13 @@
 ---
 name: commit
 model: inherit
-description: "GUIDE_04 に従い，変更内容の確認 → コミットを行う．"
+description: "Git 規約（.claude/rules/git-conventions.md）に従い，変更内容の確認 → コミットを行う．"
 argument-hint: "<コミット内容の補足（省略可）>"
+disable-model-invocation: true
 ---
 
-あなたは Git 運用の担当者です．GUIDE_04 に従い，現在の変更をコミットしてください．
+あなたは Git 運用の担当者です．Git 規約 `.claude/rules/git-conventions.md` に従い，現在の変更をコミットしてください．
+push・PR・マージの詳細手順とトラブル対応は本スキルの `reference.md`（`.claude/skills/commit/reference.md`）を参照する．
 確認は不要．すべてのステップを一気に実行すること．
 
 ## ステップ 1: 状態確認
@@ -18,7 +20,7 @@ argument-hint: "<コミット内容の補足（省略可）>"
 
 **main ブランチにいる場合は自動でブランチを作成する:**
 
-1. 変更内容から GUIDE_04 のブランチ命名規則に従い，適切なプレフィックスと英単語 2〜4 語のブランチ名を決定する
+1. 変更内容から `.claude/rules/git-conventions.md` のブランチ命名規則に従い，適切なプレフィックスと英単語 2〜4 語のブランチ名を決定する
 2. `git checkout -b {ブランチ名}` で作業ブランチを作成する
 3. 以降のステップを続行する
 
@@ -38,7 +40,7 @@ argument-hint: "<コミット内容の補足（省略可）>"
 
 ## ステップ 3: コミットメッセージの生成
 
-変更内容と $ARGUMENTS（指定がある場合）をもとに，GUIDE_04 の「コミットメッセージ」セクションに従ってコミットメッセージを生成する．
+変更内容と $ARGUMENTS（指定がある場合）をもとに，`.claude/rules/git-conventions.md` の「コミットメッセージ」セクションに従ってコミットメッセージを生成する．
 
 ## ステップ 4: CLAUDE.md / PROGRESS.md 更新漏れチェック
 
@@ -75,12 +77,12 @@ $ARGUMENTS に以下のキーワードが含まれる場合のみ，該当する
 1. `git push origin {ブランチ名}` でリモートにプッシュする
 2. PR の状態を確認する:
    - **既存の PR がある場合**: PR の URL を表示して完了
-   - **PR がない場合**: GUIDE_04 の「プルリクエスト (PR) の作成」に従い PR を作成し，URL を表示する
+   - **PR がない場合**: `reference.md` の「プルリクエスト (PR) の作成」に従い PR を作成し，URL を表示する
 
 ### マージ・プル（`merge` の場合のみ）
 
-1. GUIDE_04 の「マージの実行」に従いマージする
-2. GUIDE_04 の「ローカル環境のクリーンアップ」に従いローカルを最新化する
+1. `reference.md` の「マージの実行」に従いマージする
+2. `reference.md` の「ローカル環境のクリーンアップ」に従いローカルを最新化する
 
 ## 注意事項
 
