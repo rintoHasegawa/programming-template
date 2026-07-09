@@ -3,7 +3,7 @@
 # JSON で systemMessage (UI 表示) と additionalContext (モデルに注入) を出力する.
 # 読み取り専用 (git fetch のみ). 失敗してもセッション開始は阻害しない.
 #
-# GUIDE_06「直列運用」「main を常に動作可能」を補助する目的で,
+# GUIDE_03「直列運用」「main を常に動作可能」を補助する目的で,
 # 古い main から作業を始めるミスをセッション開始時に可視化する.
 
 # JSON 整形は python3 に任せる (jq 非依存. 既存 hook も python3 を利用).

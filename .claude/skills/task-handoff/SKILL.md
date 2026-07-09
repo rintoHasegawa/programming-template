@@ -7,7 +7,7 @@ argument-hint: "<追加メモ（省略可）>"
 
 あなたは作業引継ぎ担当です．現在 **In Progress** の Issue に，次セッション・次メンバーが再開できるだけの情報を進捗メモとして投稿します．
 
-GUIDE_06（チーム開発ルール）の「進捗は Issues / Projects と git 履歴で追う」方針に沿い，引継ぎ情報を Issue コメントに集約します（`CLAUDE.md` に進捗は書かない）．
+GUIDE_03（チーム開発ルール）の「進捗は Issues / Projects と git 履歴で追う」方針に沿い，引継ぎ情報を Issue コメントに集約します（`CLAUDE.md` に進捗は書かない）．
 
 ## 前提確認 (Pre-check)
 
@@ -15,7 +15,7 @@ GUIDE_06（チーム開発ルール）の「進捗は Issues / Projects と git 
 
 ## ステップ 1: 対象 Issue の特定 (Identify Issue)
 
-1. Project を特定する（`gh project list --owner <owner>`）．見つからない場合は「Project 未設定のため進捗メモを投稿できません．管理者の初期設定が必要です（GUIDE_06）．」と伝えて終了する．
+1. Project を特定する（`gh project list --owner <owner>`）．見つからない場合は「Project 未設定のため進捗メモを投稿できません．管理者の初期設定が必要です（GUIDE_03）．」と伝えて終了する．
 2. ボードから Status が `In Progress` の Issue を抽出する（`gh project item-list <Project番号> --owner <owner> --format json`）．
 3. 件数で挙動を変える:
    - **0 件**: 「In Progress の Issue がありません．まず `/task-start <Issue番号>` で着手してから本コマンドを使ってください．」と伝えて終了．
@@ -105,4 +105,4 @@ git checkout <ブランチ名>
 
 - 本コマンドは Issue を **Done に動かさない**．In Progress のまま残す（作業継続前提）．完了させたい場合は別途 `/commit merge` で PR をマージ → `Closes #<番号>` で自動クローズ．
 - 進捗メモは**コメント**として投稿する．Issue 本文は書き換えない．
-- Projects 操作には `project` スコープが必要．スコープエラーが出たら `gh auth refresh -s project` を実行する（GUIDE_07）．
+- Projects 操作には `project` スコープが必要．スコープエラーが出たら `gh auth refresh -s project` を実行する（`.claude/skills/task-start/reference.md`「必要なスコープ」）．

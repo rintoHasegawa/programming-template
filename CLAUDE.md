@@ -20,7 +20,7 @@
     - `/auto-refactor`（リファクタ／ドキュメント整理ループ）→ `refactor/` 専用ブランチ
     - `/auto-audit`（バグ／脆弱性の巡回監査ループ）→ `fix/` 専用ブランチ
 
-### エージェントチーム（GUIDE_05 準拠）
+### エージェントチーム（GUIDE_02 準拠）
 
 - 実装は `/implement <タスク>` で開始する（コーディング → テスト → リファクタリング → ドキュメント更新）
 - Phase 1 後に人間が動作確認，Phase 2 でテスト失敗時のみ方針判断
@@ -43,7 +43,7 @@
 ### 01_GUIDE（規約・ルール）
 
 - プロジェクト立ち上げフロー: docs/01_GUIDE/GUIDE_01_プロジェクト立ち上げフロー.md
-- エージェント運用ルール: docs/01_GUIDE/GUIDE_05_エージェント運用ルール.md
+- エージェント運用ルール: docs/01_GUIDE/GUIDE_02_エージェント運用ルール.md
 - ※ Git 規約・ドキュメント書式・命名規則・進捗記録は `.claude/rules/`（git-conventions / markdown-style / docs-naming / progress-log）に定義されている（git-conventions は常時，他は該当ファイル編集時に自動ロード）
 - ※ コーディング規約，テスト方針等はプロジェクト立ち上げ時に path-scoped rules（`.claude/rules/`）として作成する（GUIDE_01 参照）
 

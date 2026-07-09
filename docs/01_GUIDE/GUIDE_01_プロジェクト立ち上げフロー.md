@@ -70,8 +70,8 @@
   - `.claude/rules/testing.md` — テストの種類，粒度，実行タイミング，カバレッジ基準，モック方針，テストファイルの配置規則（例: `paths: ["test/**", "**/*.test.*"]`）
   - `.claude/rules/error-handling.md` — エラーの分類，処理方法，ログ出力の方針（`paths` はソースディレクトリ全般）
   - ※ リファクタリング方針は言語に依存しないため，`.claude/agents/refactorer.md` の判断基準を共通ルールとして使用する
-  - ※ 機能実装完了フローは GUIDE_05 と `/implement` で定義済みのため，別途作成しない
-  - ※ 規約以外の運用フロー文書を `docs/01_GUIDE/` に追加する場合は，team 層の `GUIDE_06`・`GUIDE_07` との衝突を避けるため `GUIDE_08` 以降の番号を使う
+  - ※ 機能実装完了フローは GUIDE_02 と `/implement` で定義済みのため，別途作成しない
+  - ※ 規約以外の運用フロー文書を `docs/01_GUIDE/` に追加する場合は，team 層の `GUIDE_03` との衝突を避けるため `GUIDE_04` 以降の番号を使う
 
 ## 開発計画 (Development Plan)
 
