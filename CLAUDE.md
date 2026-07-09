@@ -15,7 +15,7 @@
 
 - ブランチ名・コミットメッセージの書式は `.claude/rules/git-conventions.md` に従う（常時ロードされる）
 - コミットは `/commit` を使用する（push・PR 作成は `/commit push`）
-- **`/commit` はユーザーが明示的に指示した時のみ実行する．Claude が自発的に `/commit` や `git commit` を呼んではならない**（`/implement` 完了後も，案内するだけで自分ではコミットしない）
+- **`/commit` はユーザーが明示的に指示した時のみ実行する．Claude が自発的に `/commit` や `git commit` を呼んではならない**（`/implement` 完了後も，案内するだけで自分ではコミットしない．`/commit` skill は `disable-model-invocation` によりユーザー起動限定として強制されている）
   - **例外**: 以下の無人運転ループはユーザー承認済みの例外として専用ブランチに自律コミットする．いずれも push・PR・マージ・`main` への操作はしない（取り込みは人間が `/commit push` 等で行う）
     - `/auto-refactor`（リファクタ／ドキュメント整理ループ）→ `refactor/` 専用ブランチ
     - `/auto-audit`（バグ／脆弱性の巡回監査ループ）→ `fix/` 専用ブランチ

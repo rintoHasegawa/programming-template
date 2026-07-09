@@ -3,6 +3,7 @@ name: commit
 model: inherit
 description: "Git 規約（.claude/rules/git-conventions.md）に従い，変更内容の確認 → コミットを行う．"
 argument-hint: "<コミット内容の補足（省略可）>"
+disable-model-invocation: true
 ---
 
 あなたは Git 運用の担当者です．Git 規約 `.claude/rules/git-conventions.md` に従い，現在の変更をコミットしてください．
