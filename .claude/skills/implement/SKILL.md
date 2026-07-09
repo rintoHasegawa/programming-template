@@ -79,6 +79,7 @@ Refactorer の出力（リファクタリングサマリー）を記録し，確
 
 - API・データ構造の変更 → `docs/04_SPEC/` の該当仕様を更新
 - 環境・依存関係の変更 → `docs/02_ENV/` を更新
+- 起動・テスト・lint 等の開発コマンドの追加・変更 → `docs/02_ENV/ENV_04_開発コマンド.md` を更新（無ければ作成し，CLAUDE.md のドキュメント一覧にリンクを追記する）
 - 開発ステップの進捗 → `docs/03_PLAN/` や進捗記録（`CLAUDE.md` の進捗欄＋ `docs/PROGRESS.md`）を更新（書式は進捗記録ルール `.claude/rules/progress-log.md` に従う．CLAUDE.md は最新 1 行に上書き，`docs/PROGRESS.md` に詳細を末尾追記．`git log` で取れる詳細は書かない）
 - 規約・運用ルールの変更 → `docs/01_GUIDE/` を更新
 - 該当なし（軽微なバグ修正，リファクタリングのみ等）→ 更新をスキップしてよい
