@@ -108,6 +108,6 @@ git checkout <ブランチ名>
 
 ## 注意事項 (Notes)
 
-- 本コマンドは Issue を **Done に動かさない**．In Progress のまま残す（作業継続前提）．完了させたい場合は別途 `/commit merge` で PR をマージ → `Closes #<番号>` で自動クローズ．
+- 本コマンドは Issue を**クローズしない・Done に動かさない**．着手中のまま残す（作業継続前提）．完了させたい場合は別途 `/commit merge` で PR をマージ → `Closes #<番号>` で自動クローズ．
 - 進捗メモは**コメント**として投稿する．Issue 本文は書き換えない．
 - Projects 操作には `project` スコープが必要．スコープエラーが出たら `gh auth refresh -s project` を実行する（`.claude/skills/task-start/reference.md`「必要なスコープ」）．

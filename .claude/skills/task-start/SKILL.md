@@ -52,7 +52,7 @@ Git 規約 `.claude/rules/git-conventions.md` に従う．
 以下を提示する:
 
 - **Issue**: 番号・タイトル・URL
-- **ボード**: In Progress
+- **ボード**: In Progress（Project が無い場合は「アサインのみ（ボード未使用）」と表記する）
 - **ブランチ**: 作成したブランチ名
 - **次の手順**: 「`/implement` に対象 Issue の内容を渡して実装を開始してください（`gh issue view <Issue番号>` で取得できます）．」
 
