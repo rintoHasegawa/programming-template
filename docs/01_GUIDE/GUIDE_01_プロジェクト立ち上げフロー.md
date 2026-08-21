@@ -28,6 +28,8 @@
 
 - `.claude/rules/` はすべて共通層だが，進捗記録ルール（`progress-log`）だけは team モードで運用上**上書き**される（進捗は `CLAUDE.md`／`docs/PROGRESS.md` ではなく GitHub Issues と git 履歴で追う．GUIDE_03）．
 - team 層ファイルの配置・削除は `/set-mode` が一括で行い，`/sync-template` は `.claude/project-mode` を見て team 層の同期可否を判定する．team 層ファイルの正確なリストは `/set-mode`・`/sync-template` の定義に持たせており，増減時は両者を一致させること．
+- テンプレート由来のファイルをプロジェクトの都合で意図的に変更した場合は，`.claude/template-overrides.md`（テンプレート改変台帳）に方針（`keep` / `merge` / `ask`）と理由を記録する（`.claude/rules/template-customization.md`）．`/sync-template` は台帳を読み，登録ファイルをテンプレート版で上書きせず方針に従って処理する．未登録でも前回同期版から改変されたファイルは上書き前に確認される．
+
 
 ## 方針決定 (Direction)
 
