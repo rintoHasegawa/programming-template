@@ -7,6 +7,7 @@ paths: ["CLAUDE.md", "docs/PROGRESS.md"]
 `CLAUDE.md` の「開発進捗」セクションと `docs/PROGRESS.md` を更新するときは本ルールに従うこと．
 
 > ⚠ **チーム開発モード（team）では本ルールは上書きされる**．team プロジェクトでは進捗を `CLAUDE.md`・`docs/PROGRESS.md` に書かず，GitHub Issues と git 履歴で追う（[GUIDE_03](../../docs/01_GUIDE/GUIDE_03_チーム開発ルール.md)）．以下は個人開発モード（solo）の既定ルールである．team モードでは Phase 4 の進捗更新を Issue コメント（`/task-handoff` 等）に置き換える．
+> なお solo モードでも `/task-create` 等で Issue によるタスク管理を併用してよい．その場合も本ルールの進捗記録（`CLAUDE.md` 進捗欄＋ `docs/PROGRESS.md`）は従来どおり行い，Issue はタスクの管理・引継ぎの補助として扱う．
 
 ## 二段構成 (Two-tier Structure)
 

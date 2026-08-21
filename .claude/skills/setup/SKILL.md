@@ -46,8 +46,8 @@ GUIDE_01（プロジェクト立ち上げフロー）を読み，各フェーズ
 1. `.claude/project-mode` にモード（`solo` または `team` のいずれか 1 語）を書き出す．
 2. **solo の場合**: チーム層ファイルが clone で配置されていれば削除し，solo プロジェクトを clean に保つ:
    - `docs/01_GUIDE/GUIDE_03_チーム開発ルール.md`
-   - `.claude/skills/task-create/` / `task-start/` / `task-handoff/`（各ディレクトリごと削除）
    - `.claude/hooks/check_sync.sh`
+   - ※ `task-create` / `task-start` / `task-handoff` の各 skill は共通層（solo でも Issue ベースのタスク管理に使える）のため削除しない．
    - ※ `.claude/settings.json` はそのまま（solo でも `restrict_repo_access.py` を使う）．SessionStart(check_sync) の配線は追加しない．
 3. **team の場合**: 上記チーム層ファイルを残す．加えて:
    - `.claude/settings.json` に SessionStart フックを追記して `check_sync.sh` を配線する（既存の PreToolUse ブロックは保持する）:

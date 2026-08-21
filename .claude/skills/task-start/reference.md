@@ -1,7 +1,7 @@
 # Issues・Projects gh 操作リファレンス (gh Operations Reference)
 
-`/task-create`・`/task-start`・`/task-handoff` の Issue・ボード操作で参照する詳細手順．
-運用方針（Issue = 作業単位，直列運用，ボードの列等）は [GUIDE_03_チーム開発ルール](../../../docs/01_GUIDE/GUIDE_03_チーム開発ルール.md) に従う．
+`/task-create`・`/task-start`・`/task-handoff` の Issue・ボード操作で参照する詳細手順（solo / team 両モード共通）．
+team モードでの運用方針（Issue = 作業単位，直列運用，ボードの列等）は [GUIDE_03_チーム開発ルール](../../../docs/01_GUIDE/GUIDE_03_チーム開発ルール.md) に従う．solo モードでは GUIDE_03 は配置されないため，本ファイルと各 skill の記述を基準とする．
 
 - 操作は GitHub CLI（`gh`）に統一する．Web UI でも同じことはできるが，再現性とドキュメント化のため `gh` を基準とする．
 - AI に Issue を読ませる場合は `gh issue view <Issue番号>` を使う（構造化出力は `--json title,body,assignees,labels`）．
@@ -32,7 +32,7 @@ gh issue develop <Issue番号> --name feature/<概要> --base main
 
 ## Projects の操作 (Projects)
 
-> ⚠ **Projects（ボード）は既定では未使用**（GUIDE_03）．以下は将来導入時の参考として残す．
+> ⚠ **Projects（ボード）は既定では未使用**．以下は将来導入時の参考として残す．
 
 ※ `gh project` 系は `project` スコープが必要（「必要なスコープ」参照）．`<owner>` はリポジトリ所有者（個人またはオーガニゼーション）．
 

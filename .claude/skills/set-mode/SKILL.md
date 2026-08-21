@@ -20,12 +20,10 @@ argument-hint: "<solo | team>"
 
 ```
 docs/01_GUIDE/GUIDE_03_チーム開発ルール.md
-.claude/skills/task-create/SKILL.md
-.claude/skills/task-start/SKILL.md
-.claude/skills/task-start/reference.md
-.claude/skills/task-handoff/SKILL.md
 .claude/hooks/check_sync.sh
 ```
+
+※ `task-create`・`task-start`（+ `reference.md`）・`task-handoff` の各 skill は**共通層**（solo でも Issue ベースのタスク管理に使う）であり，モード切替の対象外．
 
 ## ステップ 1: 事前確認 (Pre-check)
 
@@ -62,10 +60,6 @@ git clone --depth 1 "$TEMPLATE_URL" "$TEMP_DIR"
 # team 層ファイルをコピー（既存があっても最新版で上書き）
 for f in \
   "docs/01_GUIDE/GUIDE_03_チーム開発ルール.md" \
-  ".claude/skills/task-create/SKILL.md" \
-  ".claude/skills/task-start/SKILL.md" \
-  ".claude/skills/task-start/reference.md" \
-  ".claude/skills/task-handoff/SKILL.md" \
   ".claude/hooks/check_sync.sh" ; do
   mkdir -p "$(dirname "$f")"
   cp "$TEMP_DIR/$f" "$f"
@@ -114,15 +108,10 @@ clone は不要（ローカルの削除・書き換えのみ）．**破壊的操
 ```bash
 rm -f \
   "docs/01_GUIDE/GUIDE_03_チーム開発ルール.md" \
-  ".claude/skills/task-create/SKILL.md" \
-  ".claude/skills/task-start/SKILL.md" \
-  ".claude/skills/task-start/reference.md" \
-  ".claude/skills/task-handoff/SKILL.md" \
   ".claude/hooks/check_sync.sh"
-
-# 中身が無くなったスキルディレクトリを取り除く
-rmdir ".claude/skills/task-create" ".claude/skills/task-start" ".claude/skills/task-handoff" 2>/dev/null || true
 ```
+
+※ `task-*` skill は共通層のため削除しない（solo でも Issue ベースのタスク管理に使用する）．共通層化以前に solo 化して `task-*` が消えているプロジェクトには，`/sync-template` の同期で再配置される．
 
 ### 3-B.2 settings.json から SessionStart(check_sync) を除去
 
