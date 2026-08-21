@@ -4,8 +4,10 @@ Claude Code と協働でプロジェクトを立ち上げ・実装するため�
 
 **個人開発（solo）とチーム開発（team）の 2 モード**を 1 つのテンプレートで提供する．`/setup` の冒頭でモードを選ぶだけで，チーム開発向けのルール・コマンドが有効化される．
 
-- **solo**: 1 人で開発．進捗は `CLAUDE.md` の進捗欄＋ `docs/PROGRESS.md` で追う．チーム層ファイルは配置されない．
-- **team**: 複数人が Claude Code で開発．進捗・タスクは GitHub Issues と git 履歴で追い，直列運用・条件付きセルフマージ等のチームルール（GUIDE_03）と `/task-create`・`/task-start`・`/task-handoff` コマンド，SessionStart の同期チェック（`check_sync.sh`）が有効になる．
+- **solo**: 1 人で開発．進捗は `CLAUDE.md` の進捗欄＋ `docs/PROGRESS.md` で追う．チーム層ファイル（GUIDE_03・`check_sync.sh`）は配置されない．
+- **team**: 複数人が Claude Code で開発．進捗・タスクは GitHub Issues と git 履歴で追い，直列運用・条件付きセルフマージ等のチームルール（GUIDE_03）と SessionStart の同期チェック（`check_sync.sh`）が有効になる．
+
+※ Issue ベースのタスク管理コマンド（`/task-create`・`/task-start`・`/task-handoff`）は**両モード共通**で使用できる．
 
 ## Quick Start
 
@@ -32,7 +34,7 @@ rm README.md
 
 その後 Claude Code を起動し，`/setup <project-name>` でプロジェクト立ち上げを開始する．`/setup` の冒頭で **solo / team のモードを選択**する（選択結果は `.claude/project-mode` に記録され，以降の `/sync-template` がモードに応じてチーム層ファイルを出し分ける）．以降，テンプレートの更新を取り込むときは `/sync-template` を実行する．
 
-> 途中でモードを切り替える場合は **`/set-mode <solo|team>`** を実行する．team 層ファイル（GUIDE_03・`task-*`・`check_sync.sh`）の配置／削除，`settings.json` の hook 配線，`CLAUDE.md` の team 化／solo 化，`.claude/project-mode` の更新を一括で整合させる（`.claude/project-mode` を手で書き換えるだけでは切り替わらない）．
+> 途中でモードを切り替える場合は **`/set-mode <solo|team>`** を実行する．team 層ファイル（GUIDE_03・`check_sync.sh`）の配置／削除，`settings.json` の hook 配線，`CLAUDE.md` の team 化／solo 化，`.claude/project-mode` の更新を一括で整合させる（`.claude/project-mode` を手で書き換えるだけでは切り替わらない）．
 
 ## 主なスラッシュコマンド
 
@@ -41,7 +43,7 @@ rm README.md
 - `/commit` / `/commit push` — コミット作成（`push` でプッシュと PR 作成まで）
 - `/sync-template` — テンプレートの最新変更を取り込む
 - `/set-mode <solo\|team>` — 開発モードを切り替える（team 層ファイル・settings.json・CLAUDE.md・project-mode を一括整合）
-- `/task-create` / `/task-start` / `/task-handoff` — **team モードのみ**．Issue ベースのタスク作成・着手・引継ぎ
+- `/task-create` / `/task-start` / `/task-handoff` — Issue ベースのタスク作成・着手・引継ぎ（solo / team 両モード共通）
 
 ## ドキュメント
 
@@ -51,4 +53,4 @@ rm README.md
 - `GUIDE_02_エージェント運用ルール.md` — `/implement` のエージェントチーム運用
 - `GUIDE_03_チーム開発ルール.md` — **team モードのみ**．直列運用・条件付きセルフマージ・共有設定の扱い
 
-Git 規約（ブランチ命名・コミット書式）・ドキュメントの書式・ファイル命名・進捗記録のルールは `.claude/rules/`（`git-conventions` / `markdown-style` / `docs-naming` / `progress-log`）にあり，Claude へ自動ロードされる（git-conventions は常時，他は該当ファイル編集時）．push・PR・マージの詳細手順は `.claude/skills/commit/reference.md`，Issues・Projects の `gh` 操作リファレンスは `.claude/skills/task-start/reference.md`（**team モードのみ**）にある．
+Git 規約（ブランチ命名・コミット書式）・ドキュメントの書式・ファイル命名・進捗記録のルールは `.claude/rules/`（`git-conventions` / `markdown-style` / `docs-naming` / `progress-log`）にあり，Claude へ自動ロードされる（git-conventions は常時，他は該当ファイル編集時）．push・PR・マージの詳細手順は `.claude/skills/commit/reference.md`，Issues・Projects の `gh` 操作リファレンスは `.claude/skills/task-start/reference.md` にある．

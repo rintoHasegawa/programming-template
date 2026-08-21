@@ -43,11 +43,9 @@ argument-hint: ""
 | ファイル | レイヤ |
 | --- | --- |
 | `docs/01_GUIDE/GUIDE_03_チーム開発ルール.md` | team |
-| `.claude/skills/task-create/SKILL.md` | team |
-| `.claude/skills/task-start/SKILL.md` | team |
-| `.claude/skills/task-start/reference.md` | team |
-| `.claude/skills/task-handoff/SKILL.md` | team |
 | `.claude/hooks/check_sync.sh` | team |
+
+※ `task-create`・`task-start`（+ `reference.md`）・`task-handoff` の各 skill は**共通層**（solo でも Issue ベースのタスク管理に使う）であり，モードに関わらず通常どおり同期する．
 
 判定はプロジェクトの `.claude/project-mode`（`solo` または `team`．`/setup` が作成）で行う:
 
@@ -160,10 +158,6 @@ MERGE_FILES=(".gitignore" "CLAUDE.md" "docs/PROGRESS.md" ".gitattributes" ".clau
 SKIP_FILES=("README.md")
 TEAM_LAYER_FILES=(
   "docs/01_GUIDE/GUIDE_03_チーム開発ルール.md"
-  ".claude/skills/task-create/SKILL.md"
-  ".claude/skills/task-start/SKILL.md"
-  ".claude/skills/task-start/reference.md"
-  ".claude/skills/task-handoff/SKILL.md"
   ".claude/hooks/check_sync.sh"
 )
 
@@ -400,7 +394,7 @@ rm -rf "$TEMP_DIR"
 - コード修正はユーザーの確認なしに実行しない
 - マージ必須ファイル（`.gitignore`, `CLAUDE.md`, `docs/PROGRESS.md`, `.gitattributes`, `.claude/settings.json`）は必ずステップ 5.4 の手順でマージする．盲目的な `cp` で上書きしない（フレームワーク固有の除外ルールやプロジェクト固有セクションが失われる）
 - 同期対象外ファイル（`README.md`）はテンプレート紹介用のためプロジェクトには反映しない．テンプレート側で追加・変更・削除があってもプロジェクトの該当ファイルは触らない
-- チーム層ファイル（`GUIDE_03`／`task-*`／`check_sync.sh`）は `.claude/project-mode` が `team` のプロジェクトにのみ同期する．`solo`（または未設定）のプロジェクトには配置・更新・削除いずれもしない．`/sync-template` は「版の追従」のみを行い，**モードの切り替えはしない**．solo↔team の切替は `/set-mode <solo|team>` を使う（team 層ファイルの配置／削除・`settings.json` 配線・`CLAUDE.md` の team 化／solo 化・`project-mode` 更新を一括で行う）．`.claude/project-mode` を手で書き換えるだけでは切り替わらない
+- チーム層ファイル（`GUIDE_03`／`check_sync.sh`）は `.claude/project-mode` が `team` のプロジェクトにのみ同期する．`task-*` skill は共通層のためモードに関わらず同期する．`solo`（または未設定）のプロジェクトには配置・更新・削除いずれもしない．`/sync-template` は「版の追従」のみを行い，**モードの切り替えはしない**．solo↔team の切替は `/set-mode <solo|team>` を使う（team 層ファイルの配置／削除・`settings.json` 配線・`CLAUDE.md` の team 化／solo 化・`project-mode` 更新を一括で行う）．`.claude/project-mode` を手で書き換えるだけでは切り替わらない
 - `.claude/settings.json` はマージ必須ファイル．team の SessionStart(check_sync) 配線を保持したままテンプレートの hook 変更を統合する．盲目的な `cp` で上書きしない
 - 通常コピー対象でもプロジェクト固有の変更が上書きされうる場合は，`git diff` で確認してユーザーに報告する
 - テンプレートが管理するのは `.claude/` 配下のうち `agents/`，`skills/`，`rules/`，`hooks/`，`settings.json`，`template-sync-sha` のみ．`.claude/plans/` や `.claude/commit-context.md` 等のプロジェクト固有ファイルはテンプレートに含まれないため同期対象外

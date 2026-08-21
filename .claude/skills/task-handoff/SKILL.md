@@ -1,13 +1,16 @@
 ---
 name: task-handoff
 model: inherit
-description: "現在 In Progress の Issue に進捗メモ（完了済み・残タスク・確定事項・git 状態・再開方法）をコメントで投稿する．セッション中断・引継ぎ用．"
+description: "現在着手中の Issue に進捗メモ（完了済み・残タスク・確定事項・git 状態・再開方法）をコメントで投稿する．セッション中断・引継ぎ用．solo / team 両モードで使用できる．"
 argument-hint: "<追加メモ（省略可）>"
 ---
 
-あなたは作業引継ぎ担当です．現在 **In Progress** の Issue に，次セッション・次メンバーが再開できるだけの情報を進捗メモとして投稿します．
+あなたは作業引継ぎ担当です．現在**着手中**の Issue に，次セッション・次メンバーが再開できるだけの情報を進捗メモとして投稿します．
 
-GUIDE_03（チーム開発ルール）の「進捗は Issues / Projects と git 履歴で追う」方針に沿い，引継ぎ情報を Issue コメントに集約します（`CLAUDE.md` に進捗は書かない）．
+本スキルは **solo / team 両モードで使用できる**．引継ぎ情報は Issue コメントに集約する．
+
+- **team モード**: GUIDE_03（チーム開発ルール）の「進捗は Issues / Projects と git 履歴で追う」方針に沿う（`CLAUDE.md` に進捗は書かない）．
+- **solo モード**: 通常の進捗記録（`.claude/rules/progress-log.md`．`CLAUDE.md` 進捗欄＋ `docs/PROGRESS.md`）は従来どおり運用し，本スキルはタスク単位の引継ぎメモを Issue に残す補助として使う．
 
 ## 前提確認 (Pre-check)
 
@@ -15,10 +18,12 @@ GUIDE_03（チーム開発ルール）の「進捗は Issues / Projects と git 
 
 ## ステップ 1: 対象 Issue の特定 (Identify Issue)
 
-1. Project を特定する（`gh project list --owner <owner>`）．見つからない場合は「Project 未設定のため進捗メモを投稿できません．管理者の初期設定が必要です（GUIDE_03）．」と伝えて終了する．
-2. ボードから Status が `In Progress` の Issue を抽出する（`gh project item-list <Project番号> --owner <owner> --format json`）．
+1. Project を特定する（`gh project list --owner <owner>`）．Project ボードは既定では未使用のため，見つからなくても問題ない．
+2. 着手中の Issue を抽出する:
+   - **Project がある場合**: ボードから Status が `In Progress` の Issue を抽出する（`gh project item-list <Project番号> --owner <owner> --format json`）．
+   - **Project が無い場合**: `gh issue list --assignee @me --state open` で自分にアサインされた open Issue を抽出する．
 3. 件数で挙動を変える:
-   - **0 件**: 「In Progress の Issue がありません．まず `/task-start <Issue番号>` で着手してから本コマンドを使ってください．」と伝えて終了．
+   - **0 件**: 「着手中の Issue がありません．まず `/task-start <Issue番号>` で着手してから本コマンドを使ってください．」と伝えて終了．
    - **1 件**: そのまま対象とする．
    - **複数件**: 各 Issue 番号・タイトルを示し，「どれを対象にしますか？」とユーザーに確認する．
 
@@ -103,6 +108,6 @@ git checkout <ブランチ名>
 
 ## 注意事項 (Notes)
 
-- 本コマンドは Issue を **Done に動かさない**．In Progress のまま残す（作業継続前提）．完了させたい場合は別途 `/commit merge` で PR をマージ → `Closes #<番号>` で自動クローズ．
+- 本コマンドは Issue を**クローズしない・Done に動かさない**．着手中のまま残す（作業継続前提）．完了させたい場合は別途 `/commit merge` で PR をマージ → `Closes #<番号>` で自動クローズ．
 - 進捗メモは**コメント**として投稿する．Issue 本文は書き換えない．
 - Projects 操作には `project` スコープが必要．スコープエラーが出たら `gh auth refresh -s project` を実行する（`.claude/skills/task-start/reference.md`「必要なスコープ」）．
