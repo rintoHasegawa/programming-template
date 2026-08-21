@@ -48,6 +48,7 @@
 以下は実装完了後にユーザーへ報告し，確認・実施を依頼すること．
 
 - 外部サービスの設定（コンソール操作，セキュリティルール変更等）
+  - 例外: `gh` CLI で操作できる GitHub リポジトリ設定（Dependabot alerts / security updates の有効化）は Claude が `gh api` で行う（手順は `.claude/skills/setup/reference.md`，背景は GUIDE_01「環境構築」）
 - 実機・ブラウザでの動作確認
 - ストアへのアップロード・リリース作業
 
