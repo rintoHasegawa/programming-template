@@ -40,7 +40,8 @@ rm README.md
 
 - `/setup <project-name>` — GUIDE_01 に従いプロジェクト立ち上げを対話的に進行（solo/team を選択）
 - `/implement <タスク>` — 実装パイプライン（コーディング → テスト → リファクタリング）
-- `/commit` / `/commit push` — コミット作成（`push` でプッシュと PR 作成まで）
+- `/commit` / `/commit push` / `/commit merge` — コミット作成（`push` でプッシュと PR 作成まで，`merge` でマージ・プルまで）
+- `/auto-refactor` / `/auto-audit` — 無人運転ループ（リファクタ／ドキュメント整理，バグ／脆弱性の巡回監査）．専用ブランチへ自律コミットし，push・PR・マージはしない
 - `/sync-template` — テンプレートの最新変更を取り込む（プロジェクトで意図的に変えたファイルは `.claude/template-overrides.md` の台帳に登録しておくと，上書きせず方針に従ってマージ／保持される）
 - `/set-mode <solo\|team>` — 開発モードを切り替える（team 層ファイル・settings.json・CLAUDE.md・project-mode を一括整合）
 - `/task-create` / `/task-start` / `/task-handoff` — Issue ベースのタスク作成・着手・引継ぎ（solo / team 両モード共通）
@@ -53,4 +54,4 @@ rm README.md
 - `GUIDE_02_エージェント運用ルール.md` — `/implement` のエージェントチーム運用
 - `GUIDE_03_チーム開発ルール.md` — **team モードのみ**．直列運用・条件付きセルフマージ・共有設定の扱い
 
-Git 規約（ブランチ命名・コミット書式）・ドキュメントの書式・ファイル命名・進捗記録のルールは `.claude/rules/`（`git-conventions` / `markdown-style` / `docs-naming` / `progress-log`）にあり，Claude へ自動ロードされる（git-conventions は常時，他は該当ファイル編集時）．push・PR・マージの詳細手順は `.claude/skills/commit/reference.md`，Issues・Projects の `gh` 操作リファレンスは `.claude/skills/task-start/reference.md` にある．
+Git 規約（ブランチ命名・コミット書式）・ドキュメントの書式・ファイル命名・進捗記録・テンプレート改変記録のルールは `.claude/rules/`（`git-conventions` / `markdown-style` / `docs-naming` / `progress-log` / `template-customization`）にあり，Claude へ自動ロードされる（git-conventions は常時，他は該当ファイル編集時）．push・PR・マージの詳細手順は `.claude/skills/commit/reference.md`，Issues・Projects の `gh` 操作リファレンスは `.claude/skills/task-start/reference.md`，テンプレート同期の bash ヘルパー・個別マージ手順は `.claude/skills/sync-template/reference.md` にある．

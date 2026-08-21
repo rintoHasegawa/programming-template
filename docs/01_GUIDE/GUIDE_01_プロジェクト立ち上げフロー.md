@@ -23,13 +23,12 @@
 
 | レイヤ | 対象 | 存在するモード |
 | --- | --- | --- |
-| 共通層 | `GUIDE_01`・`GUIDE_02`，`.claude/rules/` のすべて，`.claude/agents/`，skills（`commit`・`implement`・`setup`・`sync-template`・`set-mode`・`auto-refactor`・`auto-audit`・`task-create`・`task-start`（+ `reference.md`）・`task-handoff`） | solo・team 両方 |
+| 共通層 | `GUIDE_01`・`GUIDE_02`，`.claude/rules/` のすべて，`.claude/agents/`，`.claude/template-overrides.md`（雛形），skills（`commit`（+ `reference.md`）・`implement`・`setup`・`sync-template`（+ `reference.md`）・`set-mode`・`auto-refactor`・`auto-audit`・`task-create`・`task-start`（+ `reference.md`）・`task-handoff`） | solo・team 両方 |
 | team 層 | `GUIDE_03`，`.claude/hooks/check_sync.sh`，`settings.json` の SessionStart 配線 | team のみ |
 
 - `.claude/rules/` はすべて共通層だが，進捗記録ルール（`progress-log`）だけは team モードで運用上**上書き**される（進捗は `CLAUDE.md`／`docs/PROGRESS.md` ではなく GitHub Issues と git 履歴で追う．GUIDE_03）．
 - team 層ファイルの配置・削除は `/set-mode` が一括で行い，`/sync-template` は `.claude/project-mode` を見て team 層の同期可否を判定する．team 層ファイルの正確なリストは `/set-mode`・`/sync-template` の定義に持たせており，増減時は両者を一致させること．
 - テンプレート由来のファイルをプロジェクトの都合で意図的に変更した場合は，`.claude/template-overrides.md`（テンプレート改変台帳）に方針（`keep` / `merge` / `ask`）と理由を記録する（`.claude/rules/template-customization.md`）．`/sync-template` は台帳を読み，登録ファイルをテンプレート版で上書きせず方針に従って処理する．未登録でも前回同期版から改変されたファイルは上書き前に確認される．
-
 
 ## 方針決定 (Direction)
 
@@ -75,7 +74,7 @@
 ## 規約整備 (Coding Standards)
 
 技術スタックに応じたプロジェクト固有の規約を作成する．
-汎用の規約（Git 運用・ドキュメント書式・ファイル命名・進捗記録）はテンプレートの `.claude/rules/` に含まれているため，ここでは技術スタック固有の規約を追加する．
+汎用の規約（Git 運用・ドキュメント書式・ファイル命名・進捗記録・テンプレート改変記録）はテンプレートの `.claude/rules/` に含まれているため，ここでは技術スタック固有の規約を追加する．
 
 - **基本方針**: 言語・フレームワークの公式ガイドラインや広く採用されている標準規約に則る（例: Effective Dart，PEP 8，Google Style Guide 等）．プロジェクト固有のルールは標準と異なる部分のみ定義する．
 - **置き場所**: 「コードを書くときは常に X せよ」という指示型の規約は，docs ではなく **path-scoped rule**（`.claude/rules/*.md` の frontmatter に `paths:` を付けたもの）として作成する．該当ファイルの編集時に自動ロードされるため，規約の読ませ忘れが起きない．アーキテクチャの背景説明や設計判断の記録など「読み物・参照資料」は従来どおり docs（`04_SPEC`／`05_TECH`）に置く．
