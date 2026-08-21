@@ -161,3 +161,4 @@ Edit 後に `git diff CLAUDE.md` で確認する．
 - team ↔ solo の切替は共有設定の変更にあたる（GUIDE_03「共有設定の扱い」）．team プロジェクトでは専用 PR＋他メンバー 1 名 Approve を経てマージする．
 - team 層ファイルのリストは `/sync-template` の「モード依存ファイル」と一致させること．どちらかを増減したら両方を更新する．
 - solo→team で取得する team 層ファイルはテンプレート HEAD 版．版の細かな追従は以後の `/sync-template` に任せる（`template-sync-sha` は本コマンドでは変更しない）．
+- team 層ファイルが `.claude/template-overrides.md`（テンプレート改変台帳）に登録されている場合，3-A.1 の上書きや 3-B.1 の削除でプロジェクトの改変が失われる．実行前に台帳を確認し，該当があればユーザーに提示して同意を得てから行う．

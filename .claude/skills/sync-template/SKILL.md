@@ -7,8 +7,9 @@ argument-hint: ""
 
 あなたはテンプレート同期の担当者です．
 テンプレートリポジトリから最新の変更を取り込み，必要に応じてプロジェクトのコードを修正してください．
+bash ヘルパーの定義と各ファイルの個別マージ手順は本スキルの `reference.md`（`.claude/skills/sync-template/reference.md`）を参照する．
 
-実行環境: bash（Git Bash または Unix シェル）が必要．`mktemp`, `rm -rf`, `cat`, シェル変数展開を使用する．
+実行環境: bash（Git Bash または Unix シェル）が必要．`mktemp`, `rm -rf`, `cat`, `awk`, `diff`, `git merge-file`, シェル変数展開を使用する．
 
 テンプレート URL: `https://github.com/rintoHasegawa/programming-template.git`
 
@@ -23,8 +24,35 @@ argument-hint: ""
 | `docs/PROGRESS.md` | プロジェクト固有の進捗ログを保持する必要がある | 既存ファイルがある場合は内容を上書きしない．テンプレート側の骨組み（タイトル・案内コメント）に差分があれば通知のみ行い手動マージを促す |
 | `.gitattributes` | プロジェクトによって設定が異なる可能性がある | 差分を表示し，ユーザーに「上書き / マージ / スキップ」を問う |
 | `.claude/settings.json` | team モードで SessionStart(check_sync) 配線を追加している等，プロジェクト固有の hook 設定を保持する必要がある | 既存の hooks を保持しつつ，テンプレート側で追加・変更された hook のみ統合．差分を表示しユーザーに確認 |
+| `.claude/template-overrides.md` | プロジェクト固有の「テンプレート改変台帳」．登録内容はプロジェクト固有 | 既存ファイルがある場合は内容を上書きしない．テンプレート側の骨組み（説明文・記入例）に差分があれば通知のみ行い手動マージを促す（`docs/PROGRESS.md` と同じ扱い） |
 
 マージ処理の対象は **既存ファイルが存在する場合のみ**．初回同期（`.claude/template-sync-sha` がない状態）では全ファイルが A 扱いとなるが，これらのファイルはフレームワーク初期化（`flutter create` / `npm init` 等）や `/init` で既にプロジェクトに存在するのが通常なので，そのままマージ処理に入る．既存ファイルがない稀なケースに限り通常の `cp` で配置する．
+
+## プロジェクト固有改変ファイル (Project Overrides)
+
+マージ必須ファイル以外のテンプレート管理ファイル（`.claude/skills/*`，`.claude/rules/*`，`.claude/agents/*`，`.claude/hooks/*`，`docs/01_GUIDE/*` 等）も，プロジェクトの都合で**意図的に改変**されていることがある．これらを A/M のたびに `cp` で盲目的に上書きすると改変が失われるため，以下の 2 段構えで保護する．
+
+### 台帳に登録された改変（明示的保護）
+
+プロジェクトは意図的な改変を `.claude/template-overrides.md`（テンプレート改変台帳）に記録する（運用ルール: `.claude/rules/template-customization.md`）．台帳の「台帳」節の表から `| \`パス\` | 方針 | 理由 | 記録日 |` 形式の行を読み，登録ファイルは **`cp` せず方針に従って処理する**（ステップ 5.5）:
+
+| 方針 | 処理 |
+| --- | --- |
+| `keep` | 触らない．テンプレート側に変更があれば，その差分（前回同期版 → 最新）を表示して通知のみ行う |
+| `merge` | base = 前回同期版（`$LAST_SHA`），ours = プロジェクト版，theirs = テンプレート最新版の **3-way マージ**で，テンプレート側の差分だけを取り込みプロジェクトの改変を保持する．競合があれば同期担当エージェント（= あなた）が両者の意図を保って解決し，ユーザーに確認する |
+| `ask` | プロジェクトの改変内容とテンプレート側の差分を表示し，ユーザーに「上書き / マージ / スキップ」を問う |
+
+- パスが末尾 `/` で終わる行はディレクトリ指定であり，配下の全ファイルに同じ方針を適用する
+- 台帳に載っているのにテンプレート側に存在しないパス（リネーム・削除済み，または記入ミス）は同期の最後に警告する（ステップ 5.8）
+- 初回同期（`$LAST_SHA` 無し）では base が取れないため，`merge` は `ask` として扱う
+
+### 台帳に無い改変の検出（安全網）
+
+台帳に登録されていなくても，A/M 対象ファイルが**ローカルに存在し，かつ前回同期版（`$LAST_SHA` 時点のテンプレート版）と内容が異なる**場合，プロジェクト側で改変されている．これは上書きせずに「未登録改変」として集め（ステップ 5.3），まとめてユーザーに確認する（ステップ 5.6）．確認では「意図的な改変 → 台帳に登録してマージ／保持」「意図しない差分（古い手修正等） → 上書き」を選べるようにし，選択に応じて台帳へ行を追加する．
+
+前回同期版に存在しない（テンプレートで新規追加された）パスにローカルファイルが既にある場合も同様に未登録改変として扱う（プロジェクトが独自に作ったファイルをテンプレート版で潰さない）．
+
+初回同期（`$LAST_SHA` 無し）では比較対象が無いため検出は行わない．
 
 ## 同期対象外ファイル (Skip-on-sync Files)
 
@@ -91,10 +119,12 @@ LAST_SHA=$(cat .claude/template-sync-sha)
   `rm -rf "$TEMP_DIR"` で一時ディレクトリを削除し，「テンプレートに新しい変更はありません．既に最新です．」と報告して終了する．
 
 - `NEW_SHA != LAST_SHA` の場合:
+
   ```bash
   # A=追加, M=変更, D=削除, R=リネーム の種別付きで取得
   CHANGED_ENTRIES=$(git -C "$TEMP_DIR" diff --name-status "$LAST_SHA" HEAD)
   ```
+
   で変更されたファイルを種別付きで取得する．
 
 **ファイルが存在しない場合（初回同期）:**
@@ -107,7 +137,7 @@ CHANGED_ENTRIES=$(cd "$TEMP_DIR" && find . -type f -not -path "./.git/*" | sed '
 
 ## ステップ 4: 変更一覧をユーザーに提示
 
-取り込み対象のファイル一覧を種別ごとに整理してユーザーに提示する．マージ必須ファイル（`.gitignore`, `CLAUDE.md`, `docs/PROGRESS.md`, `.gitattributes`, `.claude/settings.json`）に変更がある場合は，**ユーザーが取り込み前に影響範囲を把握できるよう差分サマリーを先出しする**:
+取り込み対象のファイル一覧を種別ごとに整理してユーザーに提示する．マージ必須ファイルや台帳登録ファイルに変更がある場合は，**ユーザーが取り込み前に影響範囲を把握できるよう差分サマリーを先出しする**（取得方法は `reference.md`「変更一覧の差分サマリー」．ヘルパーが未定義ならステップ 5.2 の定義を先に実行してよい）:
 
 「**テンプレートに以下の変更があります:**
 
@@ -123,25 +153,13 @@ CHANGED_ENTRIES=$(cd "$TEMP_DIR" && find . -type f -not -path "./.git/*" | sed '
 - `docs/PROGRESS.md`（プロジェクト固有の進捗ログ．既存があれば内容を保持し，差分があれば通知のみ）
 - `.gitattributes`（差分 {D} 行．処理方針をユーザーに確認）
 - `.claude/settings.json`（既存の hooks を保持し，テンプレート側で追加・変更された hook のみ統合）
+- `.claude/template-overrides.md`（台帳の行を保持し，骨組みの差分があれば通知のみ）
+
+**📒 台帳登録済みのプロジェクト固有改変ファイルに変更があります（方針に従って処理します）:**
+
+- `{パス}`（方針: {keep/merge/ask}．理由: {台帳の理由}）
 
 取り込みを開始します．」
-
-差分サマリーは以下で取得する（該当ファイルがマージ対象かつ既存ファイルがある場合のみ出力）:
-
-```bash
-# 既存ファイル行数
-wc -l .gitignore CLAUDE.md docs/PROGRESS.md .gitattributes .claude/settings.json 2>/dev/null
-
-# テンプレート側の実効行数（.gitignore）
-grep -vE '^\s*(#|$)' "$TEMP_DIR/.gitignore" | wc -l
-
-# 既存ファイルとテンプレート最新版の差分プレビュー
-diff -u .gitignore "$TEMP_DIR/.gitignore" | head -30
-diff -u CLAUDE.md "$TEMP_DIR/CLAUDE.md" | head -50
-diff -u docs/PROGRESS.md "$TEMP_DIR/docs/PROGRESS.md" | head -30
-diff -u .gitattributes "$TEMP_DIR/.gitattributes" | head -30
-diff -u .claude/settings.json "$TEMP_DIR/.claude/settings.json" | head -30
-```
 
 ## ステップ 5: ブランチ作成とファイル反映
 
@@ -149,187 +167,96 @@ diff -u .claude/settings.json "$TEMP_DIR/.claude/settings.json" | head -30
 
 `git checkout -b chore/sync-template` でブランチを作成する．既に同名のブランチが存在する場合は削除してから作り直す．
 
-### 5.2 マージ必須ファイル判定ヘルパー
+### 5.2 判定ヘルパーの定義
 
-以降の処理で利用する判定関数を定義する:
+`reference.md`「変数・判定ヘルパー」のブロックを実行し，以降の処理で使う変数と関数を定義する:
 
-```bash
-MERGE_FILES=(".gitignore" "CLAUDE.md" "docs/PROGRESS.md" ".gitattributes" ".claude/settings.json")
-SKIP_FILES=("README.md")
-TEAM_LAYER_FILES=(
-  "docs/01_GUIDE/GUIDE_03_チーム開発ルール.md"
-  ".claude/hooks/check_sync.sh"
-)
+- 一覧: `MERGE_FILES` / `SKIP_FILES` / `TEAM_LAYER_FILES`，開発モード `PROJECT_MODE`，作業ディレクトリ `WORK_DIR`
+- 判定: `is_merge_file` / `is_skip_file` / `is_team_layer_file` / `override_policy`（台帳の方針）/ `is_diverged`（前回同期版からの改変有無）
+- 差分表示・マージ: `show_template_delta` / `show_project_delta` / `three_way_merge`
 
-# プロジェクトの開発モードを取得（未設定なら安全側で solo 扱い）
-if [ -f .claude/project-mode ]; then
-  PROJECT_MODE=$(tr -d '[:space:]' < .claude/project-mode)
-else
-  PROJECT_MODE="solo"
-fi
+### 5.3 通常コピー対象の反映
 
-is_merge_file() {
-  local t="$1"
-  for f in "${MERGE_FILES[@]}"; do
-    [ "$f" = "$t" ] && return 0
-  done
-  return 1
-}
+`reference.md`「通常コピーループ」を実行する．各エントリは次の順で判定し，最初に該当した扱いになる:
 
-is_skip_file() {
-  local t="$1"
-  for f in "${SKIP_FILES[@]}"; do
-    [ "$f" = "$t" ] && return 0
-  done
-  return 1
-}
-
-is_team_layer_file() {
-  local t="$1"
-  for f in "${TEAM_LAYER_FILES[@]}"; do
-    [ "$f" = "$t" ] && return 0
-  done
-  return 1
-}
-```
-
-`PROJECT_MODE` が `solo` の場合，チーム層ファイル（`is_team_layer_file` が真）は同期対象外ファイルと同様に完全スキップする（ステップ 5.3 のループでは `is_skip_file` 判定の直後に `[ "$PROJECT_MODE" = "solo" ] && is_team_layer_file "$file"` を追加で判定して `continue` する）．`team` の場合は通常のコピー／マージ判定に進む．
-
-### 5.3 通常コピー対象の反映（マージ必須ファイル以外）
-
-マージ必須ファイルは後段（5.4）で個別処理するため，このループではスキップする．既存ファイルがない場合は通常どおり `cp` で配置する:
-
-```bash
-echo "$CHANGED_ENTRIES" | while IFS=$'\t' read -r status file newfile; do
-  [ -z "$status" ] && continue
-  case "$status" in
-    A|M)
-      # 同期対象外ファイルは完全にスキップ（コピーも上書きもしない）
-      if is_skip_file "$file"; then
-        continue
-      fi
-      # solo モードではチーム層ファイルを完全スキップ（再配置しない）
-      if [ "$PROJECT_MODE" = "solo" ] && is_team_layer_file "$file"; then
-        continue
-      fi
-      # マージ必須ファイルで既存ファイルがある場合は 5.4 で処理
-      if is_merge_file "$file" && [ -f "$file" ]; then
-        continue
-      fi
-      mkdir -p "$(dirname "$file")"
-      cp "$TEMP_DIR/$file" "$file"
-      ;;
-    R*)
-      # file=旧パス, newfile=新パス
-      if is_skip_file "$newfile"; then
-        continue
-      fi
-      if [ "$PROJECT_MODE" = "solo" ] && is_team_layer_file "$newfile"; then
-        continue
-      fi
-      if is_merge_file "$newfile" && [ -f "$newfile" ]; then
-        continue
-      fi
-      mkdir -p "$(dirname "$newfile")"
-      cp "$TEMP_DIR/$newfile" "$newfile"
-      ;;
-  esac
-done
-```
+1. 同期対象外ファイル → 完全スキップ
+2. solo モードのチーム層ファイル → 完全スキップ
+3. マージ必須ファイル（既存あり） → 5.4 へ
+4. 台帳登録ファイル（既存あり） → `$WORK_DIR/overrides.tsv` に記録し 5.5 へ（リネームで旧パスが登録済みの場合は `RENAMED` 行として記録）
+5. 未登録改変ファイル（`is_diverged` が真） → `$WORK_DIR/diverged.tsv` に記録し 5.6 へ
+6. 上記以外 → `cp` で配置・上書き
 
 ### 5.4 マージ必須ファイルの個別処理
 
-`$CHANGED_ENTRIES` に A/M/R* で含まれ，かつ既存ファイルが存在するマージ必須ファイルについて，以下の手順で処理する．
+`$CHANGED_ENTRIES` に A/M/R* で含まれ，かつ既存ファイルが存在するマージ必須ファイルを，`reference.md`「マージ必須ファイルの個別手順」に従ってファイルごとに処理する．各手順の最後に `git diff` で結果を表示しユーザーに確認する．
 
-**`.gitignore` のマージ手順**
+### 5.5 台帳登録ファイルの処理
 
-1. 既存 `.gitignore` とテンプレート `$TEMP_DIR/.gitignore` を読む
-2. テンプレート側の**実効行**（コメント `#` 行・空行を除く）を抽出する:
-   ```bash
-   grep -vE '^\s*(#|$)' "$TEMP_DIR/.gitignore"
-   ```
-3. 抽出した各行について，既存ファイルに完全一致で含まれていないものだけを収集する
-4. 収集した行がある場合，既存ファイル末尾に以下のマーカー付きブロックで追記する:
-   ```
-   
-   # --- from template (sync-template) ---
-   {追加行}
-   ```
-   - 既存ファイル末尾に同じマーカーが既にある場合は，マーカー以降に追記して重複マーカーを作らない
-5. `git diff .gitignore` で結果を表示しユーザーに確認する
+`$WORK_DIR/overrides.tsv` の各行を方針ごとに処理する．差分の表示には `show_template_delta`（テンプレート側の差分: 何が変わったか）と `show_project_delta`（プロジェクト側の改変: 何を守るべきか）を使う．
 
-**`CLAUDE.md` のマージ手順**
+**`keep` の処理**
 
-同期担当エージェント（= あなた）が Read と Edit ツールを使ってセクション単位でマージする:
+触らない．テンプレート側に変更があった事実だけを伝える:
 
-1. 既存 `CLAUDE.md` とテンプレート版 `$TEMP_DIR/CLAUDE.md` を Read する
-2. テンプレート側の変更箇所を特定する（初回同期は LAST_SHA がないためテンプレート全体を「更新候補」として扱う）:
-   ```bash
-   if [ -n "$LAST_SHA" ]; then
-     git -C "$TEMP_DIR" show "$LAST_SHA:CLAUDE.md" 2>/dev/null > /tmp/claude_md_old || true
-     diff -u /tmp/claude_md_old "$TEMP_DIR/CLAUDE.md"
-   fi
-   ```
-3. セクションを以下の基準で分類する:
-   - **共通セクション（テンプレート管理，更新対象）**: 「必須ルール」「エージェントチーム」「Git 運用」「ドキュメント」節など，テンプレートに由来する節
-   - **プロジェクト固有セクション（保持対象）**: 「プロジェクト名」「開発進捗」や，プロジェクトが追加した固有規約の節
-4. テンプレート側で変更があった共通セクションのみを Edit で既存ファイルに反映する．プロジェクト固有セクションは一切触らない
-5. `git diff CLAUDE.md` で結果を表示しユーザーに確認する
+「📒 `{file}` は台帳で `keep` のため取り込みません（理由: {台帳の理由}）．参考までにテンプレート側の変更は以下です:」
 
-**`docs/PROGRESS.md` のマージ手順**
+→ `show_template_delta "$file"` の出力を要約して添える．取り込みたくなった場合は台帳の行を削除または `merge` に変更して再同期するよう案内する．
 
-`docs/PROGRESS.md` はプロジェクト固有の進捗ログのため，**既存ファイルがある場合は内容を上書きしない**．テンプレート側の更新は骨組み（タイトル・案内コメント）に限定されるはずなので，差分があれば通知のみ行い手動マージを促す:
+**`merge` の処理**
 
-1. 既存 `docs/PROGRESS.md` とテンプレート版 `$TEMP_DIR/docs/PROGRESS.md` を Read する
-2. 差分を表示する:
-   ```bash
-   diff -u docs/PROGRESS.md "$TEMP_DIR/docs/PROGRESS.md"
-   ```
-3. 差分がある場合，「⚠ テンプレート側の `docs/PROGRESS.md` 骨組みに変更があります．既存の追記内容を保持したまま骨組みを反映したい場合はファイルを直接編集してください．自動マージは行いません．」と通知する
-4. 既存ファイルが無い稀なケース（テンプレートを使わずに作られた古いプロジェクト等）に限り，テンプレート版をそのまま `cp` で配置する
+1. `three_way_merge "$file"` を実行する
+2. 戻り値 0（競合なし）: 「📒 `{file}` をマージしました（プロジェクトの改変を保持しつつテンプレートの差分を取り込み）」と伝え，`git diff -- "$file"` を表示してユーザーに確認する
+3. 戻り値 1（競合あり）: `$WORK_DIR/merged/$file` の競合箇所と `show_project_delta` / `show_template_delta` を Read し，同期担当エージェント（= あなた）が**プロジェクトの改変意図（台帳の理由）とテンプレート側の変更意図の両方を保つ**ように解決した内容で `$file` を Edit / Write する．競合マーカーは残さない．解決方針を説明し，`git diff -- "$file"` を表示してユーザーに確認する．両立不能と判断した場合はユーザーに「プロジェクト版優先 / テンプレート版優先」を問う
+4. 戻り値 2（初回同期等で base 無し）: `ask` の処理に切り替える
 
-**`.gitattributes` のマージ手順**
+**`ask` の処理**
 
-1. 既存ファイルとテンプレート版の差分を表示する:
-   ```bash
-   diff -u .gitattributes "$TEMP_DIR/.gitattributes"
-   ```
-2. ユーザーに以下のいずれかを選ばせる:
-   - **上書き**: テンプレート版で既存を置換
-   - **マージ**: 両者のルールを統合（具体的な統合内容は対話で決定）
-   - **スキップ**: 既存ファイルを維持
-3. 選択に応じて処理する
+1. `show_project_delta "$file"` と `show_template_delta "$file"` を表示し，台帳の理由を添えてユーザーに問う:
+   - **上書き**: テンプレート版で置換（改変を破棄．台帳の行を削除するか確認する）
+   - **マージ**: `merge` の処理を行う（以後もマージでよければ台帳の方針を `merge` に更新するか確認する）
+   - **スキップ**: 触らない
+2. 選択に応じて処理する
 
-**`.claude/settings.json` のマージ手順**
+**`RENAMED`（旧パスが台帳登録されているリネーム）の処理**
 
-`settings.json` は hooks 設定を持つ．team モードのプロジェクトは PreToolUse（`restrict_repo_access.py`）に加えて SessionStart（`check_sync.sh`）を配線しているため，テンプレート版で盲目的に上書きするとプロジェクト固有の配線が失われる．同期担当エージェント（= あなた）が Read と Edit で JSON をマージする:
+旧パス `{old}` にプロジェクトの改変があり，テンプレートでは `{new}` にリネームされている．ユーザーに状況を示し，次のいずれかを選ばせる:
 
-1. 既存 `.claude/settings.json` とテンプレート版 `$TEMP_DIR/.claude/settings.json` を Read する
-2. 差分を表示する:
-   ```bash
-   diff -u .claude/settings.json "$TEMP_DIR/.claude/settings.json"
-   ```
-3. **既存の hooks を保持したまま**，テンプレート側で追加・変更された hook（イベント・matcher・command）のみを統合する:
-   - 既存に無いイベント／hook はテンプレート版から追加する
-   - プロジェクト固有の hook（team の SessionStart `check_sync.sh` 等）は残す
-   - 同一 hook の command 変更（例: `restrict_repo_access.py` の起動方法変更）はテンプレート版に合わせる
-   - solo モードで SessionStart(check_sync) が無い場合は，team 専用の配線を勝手に追加しない
-4. `git diff .claude/settings.json` で結果を表示しユーザーに確認する
+- プロジェクト版（旧パス）を新パスへ `git mv` し，その上で台帳の方針（`keep` / `merge` / `ask`）に従って処理する（既定の推奨）．台帳のパスも新パスに書き換える
+- テンプレート版を新パスに `cp` し，旧パスは 5.7 の削除確認に回す（改変を破棄．台帳の行を削除する）
 
-### 5.5 削除候補の確認
+### 5.6 未登録改変ファイルの確認
 
-削除候補（D およびリネーム元）を抽出し，**ローカルに実在するファイルだけ**に絞る:
+`$WORK_DIR/diverged.tsv` が空でない場合，ユーザーにまとめて提示する:
 
-```bash
-DELETIONS=$(echo "$CHANGED_ENTRIES" | awk -F'\t' '$1 == "D" {print $2} $1 ~ /^R/ {print $2}')
+「**⚠ 台帳に未登録ですが，プロジェクト側で改変されているテンプレート由来ファイルがあります（上書きしていません）:**
 
-# ローカルに実在するファイルのみを削除候補に残す
-DELETIONS=$(echo "$DELETIONS" | while IFS= read -r f; do
-  [ -n "$f" ] && [ -f "$f" ] && echo "$f"
-done)
-```
+- `{file}`（前回同期版との差分 {N} 行）／ `{file}`（前回同期版に無し: プロジェクト独自ファイル）
 
-この実在フィルタにより，テンプレート側のリネームや過去の移行でプロジェクトが持っていない旧パス，solo モードに配置されないチーム層ファイルは，削除確認に出ることなく自動的に除外される．
+各ファイルについて処理を選んでください:
+
+1. **意図的な改変 → マージ**（プロジェクトの改変を保持しつつテンプレートの差分を取り込む．台帳に `merge` で登録）
+2. **意図的な改変 → 保持**（テンプレート側の変更を取り込まない．台帳に `keep` で登録）
+3. **意図しない差分 → 上書き**（テンプレート版で置換）
+
+判断材料としてプロジェクト側の改変内容を表示します．」
+
+→ 各ファイルについて `show_project_delta "$file"` を表示する（長い場合は要約し，全文は求めに応じて出す）．
+
+ユーザーの選択に応じて処理する:
+
+- **マージ**: 5.5 の `merge` の処理を行い，台帳の「台帳」表に `| \`{file}\` | merge | {ユーザーから聞いた理由} | {今日の日付} |` を追記する
+- **保持**: 触らない．台帳に `keep` で同様に追記する
+- **上書き**: `cp "$TEMP_DIR/$file" "$file"` で置換する
+- `nobase`（テンプレート新規追加パスにプロジェクト独自ファイルが既にある）の場合は base が無いためマージできない．「保持（`keep` 登録）」「上書き」「プロジェクト版を別名に退避してテンプレート版を配置」から選ばせる
+
+理由を聞かずに勝手に台帳へ登録しない（理由は次回同期の判断根拠になる）．ユーザーが理由を省略した場合は「（理由未記入．次回同期時に確認）」と記録する．
+
+### 5.7 削除候補の確認
+
+`reference.md`「削除候補の抽出」で，削除候補（D およびリネーム元）のうち**ローカルに実在するファイルだけ**を `$DELETIONS` に得る．さらに台帳の方針で振り分ける:
+
+- 台帳で `keep` のファイルは削除候補から**自動的に除外**し，「📒 `{file}` はテンプレートから削除されましたが台帳で `keep` のため残します」と通知する
+- 台帳で `merge` / `ask` のファイル，および 5.5 の `RENAMED` で「テンプレート版を採用」を選んだ旧パスは削除候補に残し，一覧に「（台帳: {方針}．理由: {理由}）」を添えて確認する．削除する場合は台帳の行も削除する
 
 `$DELETIONS` が空でない場合，ユーザーに確認を求める:
 
@@ -339,14 +266,15 @@ done)
 
 プロジェクトからも削除してよいですか？（残したいファイルがあれば指定してください）」
 
-ユーザー確認後，対象ファイルを `rm` で削除する．プロジェクトが独自に残したいファイルは削除対象から除外する．
+ユーザー確認後，対象ファイルを `rm` で削除する．プロジェクトが独自に残したいファイルは削除対象から除外する（今後も残すなら台帳に `keep` で登録するよう勧める）．
 
-### 5.6 同期済み SHA の記録とクリーンアップ
+### 5.8 台帳の整合チェック
 
-```bash
-echo "$NEW_SHA" > .claude/template-sync-sha
-rm -rf "$TEMP_DIR"
-```
+`reference.md`「台帳の整合チェック」で，台帳に登録されているのにテンプレート最新版に存在しないパスを列挙する．該当があれば「⚠ 台帳の以下のパスはテンプレートに存在しません．リネーム／削除に追従してパスを直すか，プロジェクト独自ファイルなら台帳から行を削除してください: {一覧}」と通知する（自動では書き換えない）．
+
+### 5.9 同期済み SHA の記録とクリーンアップ
+
+`reference.md`「クリーンアップ」を実行する（`.claude/template-sync-sha` に `$NEW_SHA` を記録し，`$TEMP_DIR`・`$WORK_DIR` を削除）．
 
 ## ステップ 6: 変更内容の分析
 
@@ -379,6 +307,7 @@ rm -rf "$TEMP_DIR"
 - ブランチ: `{ブランチ名}`
 - 開発モード: `{PROJECT_MODE}`（チーム層ファイルは {team: 同期対象 / solo: スキップ}）
 - 取り込んだ変更: {変更の要約}
+- プロジェクト固有改変: 台帳登録 {N} 件を処理（keep {a} / merge {b} / ask {c}），未登録改変 {M} 件を確認（台帳に {K} 件追加）
 - コード修正: {あり（内容）/なし}
 
 `/commit push` でプッシュと PR 作成ができます．」
@@ -389,13 +318,13 @@ rm -rf "$TEMP_DIR"
 
 ## 注意事項
 
-- 本コマンドは一時ディレクトリ（`mktemp -d`）に clone したテンプレートを Read / `cp` / `rm -rf` する．`restrict_repo_access.py` フックはシステム一時ディレクトリを許可ゾーンとして例外扱いしており，本コマンドはそれに依存している（フックの例外を外すと本コマンドが動かなくなる）
+- 本コマンドは一時ディレクトリ（`mktemp -d`）に clone したテンプレートを Read / `cp` / `rm -rf` し，作業ファイルも一時ディレクトリに置く．`restrict_repo_access.py` フックはシステム一時ディレクトリを許可ゾーンとして例外扱いしており，本コマンドはそれに依存している（フックの例外を外すと本コマンドが動かなくなる）
 - テンプレートリポジトリへの push は行わない
 - コード修正はユーザーの確認なしに実行しない
-- マージ必須ファイル（`.gitignore`, `CLAUDE.md`, `docs/PROGRESS.md`, `.gitattributes`, `.claude/settings.json`）は必ずステップ 5.4 の手順でマージする．盲目的な `cp` で上書きしない（フレームワーク固有の除外ルールやプロジェクト固有セクションが失われる）
+- マージ必須ファイル（冒頭の表）は必ずステップ 5.4 の手順でマージする．盲目的な `cp` で上書きしない（フレームワーク固有の除外ルール，プロジェクト固有セクション，team の SessionStart(check_sync) 配線等が失われる）
+- `/sync-template` は**プロジェクトの改変を黙って消さない**ことを最優先にする．テンプレート改変台帳（`.claude/template-overrides.md`）に登録されたファイルは `cp` せず方針（`keep` / `merge` / `ask`）に従ってステップ 5.5 で処理し，台帳に無くても前回同期版と内容が異なるローカルファイルは上書きせずステップ 5.6 でユーザーに確認する．判断に迷う場合は上書きせずユーザーに問う
+- 台帳への登録は必ず理由を添える（ユーザーから聞く）．理由の無い登録は次回同期時の判断材料にならない．台帳の書式（パス列はバッククォート囲み，方針列は `keep` / `merge` / `ask`）を崩さない
 - 同期対象外ファイル（`README.md`）はテンプレート紹介用のためプロジェクトには反映しない．テンプレート側で追加・変更・削除があってもプロジェクトの該当ファイルは触らない
 - チーム層ファイル（`GUIDE_03`／`check_sync.sh`）は `.claude/project-mode` が `team` のプロジェクトにのみ同期する．`task-*` skill は共通層のためモードに関わらず同期する．`solo`（または未設定）のプロジェクトには配置・更新・削除いずれもしない．`/sync-template` は「版の追従」のみを行い，**モードの切り替えはしない**．solo↔team の切替は `/set-mode <solo|team>` を使う（team 層ファイルの配置／削除・`settings.json` 配線・`CLAUDE.md` の team 化／solo 化・`project-mode` 更新を一括で行う）．`.claude/project-mode` を手で書き換えるだけでは切り替わらない
-- `.claude/settings.json` はマージ必須ファイル．team の SessionStart(check_sync) 配線を保持したままテンプレートの hook 変更を統合する．盲目的な `cp` で上書きしない
-- 通常コピー対象でもプロジェクト固有の変更が上書きされうる場合は，`git diff` で確認してユーザーに報告する
-- テンプレートが管理するのは `.claude/` 配下のうち `agents/`，`skills/`，`rules/`，`hooks/`，`settings.json`，`template-sync-sha` のみ．`.claude/plans/` や `.claude/commit-context.md` 等のプロジェクト固有ファイルはテンプレートに含まれないため同期対象外
+- テンプレートが管理するのは `.claude/` 配下のうち `agents/`，`skills/`，`rules/`，`hooks/`，`settings.json`，`template-sync-sha`，`template-overrides.md`（雛形のみ．登録内容はプロジェクト固有）のみ．`.claude/plans/` や `.claude/commit-context.md` 等のプロジェクト固有ファイルはテンプレートに含まれないため同期対象外
 - `chore/sync-template` ブランチは他の作業ブランチと混ぜず，作成後は速やかにマージすること．複数の作業ブランチで `/sync-template` を実行すると `.claude/template-sync-sha` がコンフリクトする．コンフリクト時は新しい（HEAD 側の）SHA を採用すること．

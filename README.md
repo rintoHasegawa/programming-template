@@ -41,7 +41,7 @@ rm README.md
 - `/setup <project-name>` — GUIDE_01 に従いプロジェクト立ち上げを対話的に進行（solo/team を選択）
 - `/implement <タスク>` — 実装パイプライン（コーディング → テスト → リファクタリング）
 - `/commit` / `/commit push` — コミット作成（`push` でプッシュと PR 作成まで）
-- `/sync-template` — テンプレートの最新変更を取り込む
+- `/sync-template` — テンプレートの最新変更を取り込む（プロジェクトで意図的に変えたファイルは `.claude/template-overrides.md` の台帳に登録しておくと，上書きせず方針に従ってマージ／保持される）
 - `/set-mode <solo\|team>` — 開発モードを切り替える（team 層ファイル・settings.json・CLAUDE.md・project-mode を一括整合）
 - `/task-create` / `/task-start` / `/task-handoff` — Issue ベースのタスク作成・着手・引継ぎ（solo / team 両モード共通）
 

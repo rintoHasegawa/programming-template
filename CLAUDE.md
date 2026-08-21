@@ -20,6 +20,11 @@
     - `/auto-refactor`（リファクタ／ドキュメント整理ループ）→ `refactor/` 専用ブランチ
     - `/auto-audit`（バグ／脆弱性の巡回監査ループ）→ `fix/` 専用ブランチ
 
+### テンプレート同期
+
+- テンプレートの更新は `/sync-template` で取り込む
+- テンプレート由来のファイル（`.claude/agents/`・`skills/`・`rules/`・`hooks/`，`docs/01_GUIDE/`）を**このプロジェクトの都合で意図的に変更した**ときは，`.claude/template-overrides.md`（テンプレート改変台帳）に理由付きで記録する（`.claude/rules/template-customization.md`．該当ファイル編集時に自動ロードされる）．記録が無いと次回同期で改変が消えうる
+
 ### タスク管理（任意）
 
 - やるべきことを GitHub Issues で管理してよい（solo / team 共通）．`/task-create`（起票・事前計画）→ `/task-start <Issue番号>`（着手準備）→ `/task-handoff`（中断時の引継ぎメモ投稿）を使う
