@@ -96,7 +96,7 @@ CI が未構築の間は「CI 緑」を以下で代替する．CI 構築後は�
 
 ## 共有設定の扱い (Shared Configuration)
 
-`CLAUDE.md` と `.claude/`（agents・skills・hooks・settings.json）は全員の Claude の挙動を決める共有インフラである．
+`CLAUDE.md` と `.claude/`（agents・skills・rules・hooks・settings.json・template-overrides.md）は全員の Claude の挙動を決める共有インフラである．
 
 - **git 追跡を継続する**．untrack や `.gitignore` 化はしない（履歴の保全と挙動の統一のため）．
 - **進捗は `CLAUDE.md` に書かない**．進捗は Issues と git 履歴で追う（「タスク管理」参照）．
