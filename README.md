@@ -38,7 +38,7 @@ rm README.md
 
 ## 主なスラッシュコマンド
 
-- `/setup <project-name>` — GUIDE_01 に従いプロジェクト立ち上げを対話的に進行（solo/team を選択）
+- `/setup <project-name>` — GUIDE_01 に従いプロジェクト立ち上げを対話的に進行（solo/team を選択．GitHub リポジトリの Dependabot alerts / security updates も `gh api` で有効化）
 - `/implement <タスク>` — 実装パイプライン（コーディング → テスト → リファクタリング）
 - `/commit` / `/commit push` / `/commit merge` — コミット作成（`push` でプッシュと PR 作成まで，`merge` でマージ・プルまで）
 - `/auto-refactor` / `/auto-audit` — 無人運転ループ（リファクタ／ドキュメント整理，バグ／脆弱性の巡回監査）．専用ブランチへ自律コミットし，push・PR・マージはしない
