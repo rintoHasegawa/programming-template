@@ -137,6 +137,7 @@ Dependabot alerts（"Vulnerabilities"）と Dependabot security updates はリ�
 CLAUDE.md を更新しました．
 GitHub リポジトリのセキュリティ設定（Dependabot alerts / security updates）: {有効化済み / リポジトリ未作成のため未実施（ENV_03 のコマンドで有効化してください）}
 依存バージョン更新（`.github/dependabot.yml`）: {対象エコシステム一覧} を {更新頻度} で監視
+Dependabot が作る PR・alert は `/deps-update` で処理できます（安全な更新は自動マージ，メジャー更新等は分析付きで報告）．
 最初の実装ステップは `{ステップ名}` です．`/implement {タスク}` で開始できます．
 {team の場合: 「チーム運用の管理者初期設定（GitHub repo・CI 等）は GUIDE_03 を参照してユーザー側で実施してください．」}」
 

@@ -14,6 +14,11 @@
 .claude/auto-audit-fixed.md
 .claude/auto-audit-skip.md
 
+# /deps-update のローカル運用状態（マージ済み台帳・報告台帳・スキップ台帳）
+.claude/deps-update-merged.md
+.claude/deps-update-report.md
+.claude/deps-update-skip.md
+
 # -- プロジェクト立ち上げ時に有効化する（.claude/rules/git-conventions.md 参照） --
 # .env
 # .env.*

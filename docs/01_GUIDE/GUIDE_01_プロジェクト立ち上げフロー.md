@@ -23,7 +23,7 @@
 
 | レイヤ | 対象 | 存在するモード |
 | --- | --- | --- |
-| 共通層 | `GUIDE_01`・`GUIDE_02`，`.claude/rules/` のすべて，`.claude/agents/`，`.claude/template-overrides.md`（雛形），skills（`commit`（+ `reference.md`）・`implement`・`setup`（+ `reference.md`）・`sync-template`（+ `reference.md`）・`set-mode`・`auto-refactor`・`auto-audit`・`task-create`・`task-start`（+ `reference.md`）・`task-handoff`） | solo・team 両方 |
+| 共通層 | `GUIDE_01`・`GUIDE_02`，`.claude/rules/` のすべて，`.claude/agents/`，`.claude/template-overrides.md`（雛形），skills（`commit`（+ `reference.md`）・`implement`・`setup`（+ `reference.md`）・`sync-template`（+ `reference.md`）・`set-mode`・`auto-refactor`・`auto-audit`・`deps-update`（+ `reference.md`）・`task-create`・`task-start`（+ `reference.md`）・`task-handoff`） | solo・team 両方 |
 | team 層 | `GUIDE_03`，`.claude/hooks/check_sync.sh`，`settings.json` の SessionStart 配線 | team のみ |
 
 - `.claude/rules/` はすべて共通層だが，進捗記録ルール（`progress-log`）だけは team モードで運用上**上書き**される（進捗は `CLAUDE.md`／`docs/PROGRESS.md` ではなく GitHub Issues と git 履歴で追う．GUIDE_03）．
@@ -57,7 +57,7 @@
 - **人間が決めること**: 開発マシンの選定，クラウドサービスのアカウント作成，環境構築方法の選択
 - **AI に依頼できること**: 環境構築手順書の作成，設定ファイルの生成，`.gitignore` の作成，Dockerfile や devcontainer.json 等の構築用ファイルの作成，GitHub リポジトリのセキュリティ設定・`.github/dependabot.yml` の生成（後述）
 - **GitHub リポジトリのセキュリティ設定**: GitHub の Settings → Code security にある **Dependabot alerts**（既知脆弱性の検出．"Vulnerabilities" として表示される）と **Dependabot security updates** はリポジトリごとに既定で OFF のため，リポジトリを作成したら必ず有効化する．モードに関わらず `/setup` が `gh api` で有効化・検証する（コマンド・検証・トラブル対応は `.claude/skills/setup/reference.md`「GitHub リポジトリのセキュリティ設定」）．`/setup` 時点でリポジトリが無い場合は，`ENV_03_管理者用環境構築手順.md` に転記した同じコマンドをリポジトリ作成後に実行する．
-- **依存バージョン更新（Dependabot version updates）**: 上記とは別に，依存パッケージを定期的に最新化する PR を作らせるため，`/setup` が技術スタックに合わせて `.github/dependabot.yml` を必ず生成する（週 1 回・マイナー／パッチをまとめる・`[update]` プレフィックス．エコシステム対応表と雛形は `.claude/skills/setup/reference.md`「依存バージョン更新の設定」）．Dependabot の更新 PR も通常の PR と同じく確認してからマージする．
+- **依存バージョン更新（Dependabot version updates）**: 上記とは別に，依存パッケージを定期的に最新化する PR を作らせるため，`/setup` が技術スタックに合わせて `.github/dependabot.yml` を必ず生成する（週 1 回・マイナー／パッチをまとめる・`[update]` プレフィックス．エコシステム対応表と雛形は `.claude/skills/setup/reference.md`「依存バージョン更新の設定」）．Dependabot が作る PR と alert の処理は `/deps-update` で行う（ゲートを満たす PR を自動マージし，メジャー更新等は分析付きで報告．GUIDE_02「コミットルール」の例外）．
 - **成果物**:
   - `ENV_02_環境構築手順.md` — メンバーの参加時や環境の再構築時に使う手順
   - `ENV_03_管理者用環境構築手順.md` — プロジェクト作成時に一度だけ行う初期設定（リポジトリ作成，GitHub リポジトリのセキュリティ設定，外部サービスの設定等）
