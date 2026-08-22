@@ -7,7 +7,7 @@ argument-hint: "<プロジェクト名>"
 
 あなたはプロジェクト立ち上げのファシリテーターです．
 GUIDE_01（プロジェクト立ち上げフロー）を読み，各フェーズのルールを理解した上で以下の手順を実行してください．
-`gh` CLI で行う GitHub リポジトリ設定のコマンドと手順は本スキルの `reference.md`（`.claude/skills/setup/reference.md`）を参照する．
+`gh` CLI で行う GitHub リポジトリ設定のコマンドと，`.github/dependabot.yml` の生成規則は本スキルの `reference.md`（`.claude/skills/setup/reference.md`）を参照する．
 
 ## 基本ルール
 
@@ -102,6 +102,14 @@ Dependabot alerts（"Vulnerabilities"）と Dependabot security updates はリ�
 - `ENV_03_管理者用環境構築手順.md` のドラフトには，GitHub リポジトリ作成の直後の手順として `reference.md` の有効化・検証コマンドを必ず転記する（`/setup` 後にリポジトリを作った場合に管理者が単体で実行できるようにするため）
 - ENV_03 を書き出したら，その場で `reference.md` の手順を 1 度実行する．リモート未作成で実行できなければ Phase 7 で再試行する
 
+### 依存バージョン更新の設定 (Dependabot Version Updates)
+
+上記の脆弱性検出とは別に，依存パッケージを定期的に最新化する PR を Dependabot に作らせるため，フェーズ 3 で `.github/dependabot.yml` を**ユーザーに選択を聞かずに必ず生成する**（`.gitignore` 等と同じ「設定ファイルの生成」の一部として扱う）．
+
+- フェーズ 2 で確定した技術スタック（`ENV_01_技術スタック.md`）から対象エコシステムを決め，`reference.md`「依存バージョン更新の設定」の対応表と雛形に従って生成する
+- 生成内容（対象エコシステム・更新頻度・グループ化）は他の成果物と同様にドラフトとしてユーザーに提示し，承認を得てから書き出す（「作るかどうか」は聞かず，「内容」だけを確認する）
+- マニフェストがまだ存在しない場合（立ち上げ時点でコードが無い）でも，スタックが確定していれば生成してよい．Dependabot はマニフェストが置かれた時点から動き始める
+
 ## フェーズ 7: 実装開始
 
 1. GUIDE_01 の「CLAUDE.md の管理」セクションに従い，CLAUDE.md を最終更新する
@@ -118,7 +126,7 @@ Dependabot alerts（"Vulnerabilities"）と Dependabot security updates はリ�
    - GitHub リポジトリ作成・メンバー招待
    - Issue テンプレートの用意
    - CI 構築（未構築の間は GUIDE_03「CI 構築までの暫定ゲート」を適用）
-   - 依存バージョンの定期更新も行うならスタックに応じた `.github/dependabot.yml` を追加（エコシステムはプロジェクト固有のため setup では作らない．脆弱性検出（Dependabot alerts）は上記 4 で AI が有効化済み）
+   - ※ 脆弱性検出（Dependabot alerts / security updates）は上記 4 で AI が有効化済み，依存バージョン更新（`.github/dependabot.yml`）はフェーズ 3 で生成済みのため，ここでは案内しない．CI を `github-actions` で組んだら `dependabot.yml` に `github-actions` エコシステムが含まれていることを確認する（`reference.md`「依存バージョン更新の設定」）
 
 「**全フェーズが完了しました．**
 
@@ -128,6 +136,7 @@ Dependabot alerts（"Vulnerabilities"）と Dependabot security updates はリ�
 開発モード: {solo / team}
 CLAUDE.md を更新しました．
 GitHub リポジトリのセキュリティ設定（Dependabot alerts / security updates）: {有効化済み / リポジトリ未作成のため未実施（ENV_03 のコマンドで有効化してください）}
+依存バージョン更新（`.github/dependabot.yml`）: {対象エコシステム一覧} を {更新頻度} で監視
 最初の実装ステップは `{ステップ名}` です．`/implement {タスク}` で開始できます．
 {team の場合: 「チーム運用の管理者初期設定（GitHub repo・CI 等）は GUIDE_03 を参照してユーザー側で実施してください．」}」
 
