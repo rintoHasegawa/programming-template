@@ -86,6 +86,15 @@ Issue を立てる場合の標準フロー（小さい変更や探索的作業�
 - 機能 PR に混ぜず，専用 PR とする（「共有設定の扱い」参照）．
 - 他メンバー 1 名の Approve を必須とする（セルフマージ不可）．
 
+### Dependabot の依存更新 PR (Dependabot PR)
+
+Dependabot が作成する依存更新 PR（security updates / version updates）は，人間が書いた PR ではないため上記の「`/implement` 完走」「Phase 1 動作確認」を満たせない．代わりに `/deps-update` のゲートを品質ゲートとする（`.claude/skills/deps-update/SKILL.md`）．
+
+- **`/deps-update` がマージしてよいもの**: メジャー更新でなく，競合が無く，CI 緑（CI 未構築ならローカル検証緑）の PR．`gh pr merge --merge` で取り込む．これは「AI が `main` へマージする」唯一の例外である（GUIDE_02「コミットルール」）．
+- **人間が判断するもの**: メジャー更新（`0.x` のマイナー更新を含む），CI 赤，修正版の無い alert，Dependabot が PR を作れなかった alert．`/deps-update` が影響分析と推奨（そのままマージ／`/implement` で追従／`@dependabot ignore` で見送り）を PR コメントと完了報告に出すので，それを見て決める．
+- 依存更新 PR は共有設定（`CLAUDE.md`・`.claude/`）を変更しないため，他メンバーの Approve は不要．`main` にブランチ保護（必須レビュー）を設定している場合は `/deps-update` はマージできないので，マージ可と判定した一覧を提示するにとどまり，人間がマージする．
+- `/deps-update` を実行するのは原則 1 名（管理者またはその週の担当）とし，マージ後はチームに周知して全員が `git pull` する（直列運用のため，他メンバーの作業ブランチは次の rebase で追従する）．
+
 ### CI 構築までの暫定ゲート (Interim Gate)
 
 CI が未構築の間は「CI 緑」を以下で代替する．CI 構築後はこの節を削除する．

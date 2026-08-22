@@ -44,6 +44,8 @@
 - `/auto-refactor`（リファクタ／ドキュメント整理ループ）→ `refactor/` 専用ブランチ
 - `/auto-audit`（バグ／脆弱性の巡回監査ループ．発見を裏取り後，再現テストで正しさを担保できるものだけ自動修正し，それ以外は台帳へ報告）→ `fix/` 専用ブランチ
 
+※ **例外（Dependabot PR の取り込み）**: `/deps-update` は，Dependabot が作成した依存更新 PR に限り，ゲート（メジャー更新でない・競合なし・CI 緑またはローカル検証緑）を満たすものを `gh pr merge --merge` で `main` に取り込む．これは「Claude が `main` へマージする」唯一の承認済み例外であり，ユーザーが明示的に起動した時のみ動く．メジャー更新・CI 赤・PR が付かない alert は影響分析付きで報告し，人間が判断する（`.claude/skills/deps-update/SKILL.md`）．
+
 ## 進捗記録の運用ルール（CLAUDE.md / PROGRESS.md）
 
 進捗記録（CLAUDE.md「開発進捗」・`docs/PROGRESS.md` の書き方）のルールは `.claude/rules/progress-log.md` に定義されている．該当ファイルを編集する際に自動で読み込まれる．

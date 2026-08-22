@@ -42,6 +42,7 @@ rm README.md
 - `/implement <タスク>` — 実装パイプライン（コーディング → テスト → リファクタリング）
 - `/commit` / `/commit push` / `/commit merge` — コミット作成（`push` でプッシュと PR 作成まで，`merge` でマージ・プルまで）
 - `/auto-refactor` / `/auto-audit` — 無人運転ループ（リファクタ／ドキュメント整理，バグ／脆弱性の巡回監査）．専用ブランチへ自律コミットし，push・PR・マージはしない
+- `/deps-update` — Dependabot の依存更新 PR と alert を処理（メジャー更新でなく CI／ローカル検証が緑の PR は `main` に自動マージ，メジャー更新・CI 赤・修正版なし alert は影響分析付きで報告．`/deps-update report` で報告のみ）
 - `/sync-template` — テンプレートの最新変更を取り込む（プロジェクトで意図的に変えたファイルは `.claude/template-overrides.md` の台帳に登録しておくと，上書きせず方針に従ってマージ／保持される）
 - `/set-mode <solo\|team>` — 開発モードを切り替える（team 層ファイル・settings.json・CLAUDE.md・project-mode を一括整合）
 - `/task-create` / `/task-start` / `/task-handoff` — Issue ベースのタスク作成・着手・引継ぎ（solo / team 両モード共通）
