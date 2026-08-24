@@ -5,51 +5,31 @@ description: "既存 Issue を拾って作業を開始する（アサイン・�
 argument-hint: "<Issue 番号>"
 ---
 
-あなたはタスク着手の準備担当です．
-本スキルの `reference.md`（Issues・Projects の gh 操作リファレンス）に従い，**既存 Issue を拾って**作業に取り掛かるための準備を整えてください．
+あなたはタスク着手の司令塔です．着手準備（アサイン・ボード操作・作業ブランチ作成）の実行は **ops-runner エージェント**（軽量モデル）に委譲し，あなた自身はユーザー確認の仲介と結果の報告だけを行います（使用量節約のため，git・gh 操作を自分では行わない）．
 
-本スキルは **solo / team 両モードで使用できる**．team モードでは GUIDE_03（チーム開発ルール）にも従うこと．solo モードでは GUIDE_03 は存在しないため，本スキルと reference.md の記述を基準とする．
+本スキルは **solo / team 両モードで使用できる**．team モードでは GUIDE_03（チーム開発ルール）にも従うこと．solo モードでは GUIDE_03 は存在しないため，本スキルと本スキルの `reference.md` の記述を基準とする．
 
 本コマンドは既存 Issue から作業を始めるためのものです．新規 Issue を立てる場合は `/task-create` を使ってください．Issue 無しで小さい変更や試験的作業を進める場合はこのコマンドは不要です．
 
-## 前提確認 (Pre-check)
+## ステップ 1: 前提確認 (Pre-check)
 
-1. 作業ツリーの状態を確認する（`git status`）．未コミットの変更がある場合は，その旨をユーザーに伝え，先に片付けるか続行するか確認する．
-2. 現在のブランチを確認する（`git branch --show-current`）．`main` 以外にいる場合は，そのブランチに未マージのコミットが残っていないか確認する（`git log main..HEAD --oneline`）．残っていれば「前の作業が未マージです．先にマージしてから着手するのが推奨です．続行しますか？」とユーザーに確認する（直列運用の原則）．
-3. $ARGUMENTS を確認する．Issue 番号（数値または `#数値`）が指定されていなければ「対象の Issue 番号を指定してください．新規 Issue を立てる場合は `/task-create` を使います」と伝えて終了する．
+$ARGUMENTS を確認する．Issue 番号（数値または `#数値`）が指定されていなければ「対象の Issue 番号を指定してください．新規 Issue を立てる場合は `/task-create` を使います」と伝えて終了する．
 
-## ステップ 1: 直列運用チェック (Serial Check)
+## ステップ 2: 委譲 (Delegate)
 
-同時に進行中のコード作業は原則 1 件とする（team モードの根拠は GUIDE_03「作業の直列化」．solo でも仕掛かりを増やさないため同じ原則を適用する）．
+ops-runner エージェントを起動し，プロンプトに以下を含める:
 
-1. リポジトリ所有者を取得する（`gh repo view --json owner --jq .owner.login`）．
-2. Project を特定する（`gh project list --owner <owner>`）．複数ある場合はユーザーに確認する．見つからない場合はその旨を伝える（Project ボードは既定では未使用のため，無くても問題ない）．この場合，進行中チェックはボードの代わりに `gh issue list --assignee @me --state open` で行い，ステップ 3（ボード操作）は飛ばして進める．
-3. 進行中の作業を数える（Project がある場合は `gh project item-list <Project番号> --owner <owner> --format json` で Status が `In Progress` のもの，無い場合は上記のアサイン済み open Issue）．対象 Issue 以外で 1 件以上ある場合は，該当タスクを示し「直列運用では進行中の作業は原則 1 件です．続行しますか？」とユーザーに確認する（禁止ではなく原則）．
+- 手順書: 本スキルの `reference.md`（`.claude/skills/task-start/reference.md`）の「/task-start 実行手順」を読んで従うこと
+- 対象の Issue 番号
+- 確認が必要な事態（未コミット変更・未マージブランチ・進行中タスクあり・他人アサイン等）では，該当項目をまとめて停止・報告すること
 
-## ステップ 2: 対象 Issue の確認・アサイン (Verify & Assign)
+## ステップ 3: 確認の仲介 (Confirm)
 
-1. `gh issue view <Issue番号>` で Issue の内容を確認する．存在しない・クローズ済みの場合はユーザーに知らせて判断を仰ぐ．
-2. 担当者が未設定，または自分以外なら，`gh issue edit <Issue番号> --add-assignee @me` で自分をアサインする（他人がアサインされている場合は，重複着手にならないかユーザーに確認）．
+エージェントが確認事項で停止した場合は，状況をユーザーに提示して判断を仰ぎ，承認された項目を「ユーザー承認済み」と明示して再委譲する．
 
-## ステップ 3: ボードを In Progress へ (Board)
+## ステップ 4: 完了サマリー (Summary)
 
-`reference.md` の「Projects の操作」に従う（Project が無い場合はこのステップを飛ばす）．
-
-1. 対象 Issue がボードに未追加なら `gh project item-add <Project番号> --owner <owner> --url <Issue の URL>` で追加する．
-2. 対象アイテムの Status を `In Progress` に変更する（`gh project field-list`・`item-list` で必要な ID を取得し `gh project item-edit`）．
-3. `gh project` の書き込み系は成功しても無出力のことがある．`gh project item-list` で結果を確認する（`reference.md`「トラブルシューティング」）．
-
-## ステップ 4: 作業ブランチ作成 (Branch)
-
-Git 規約 `.claude/rules/git-conventions.md` に従う．
-
-1. `git checkout main && git pull origin main` で `main` を最新化する．
-2. git-conventions ルールの基本形式（`[プレフィックス][概要]`）でブランチ名を決める．プレフィックスはタスク種別（`feature` / `fix` / `refactor` / `docs` / `chore`），概要は内容を表す英単語 2〜4 語（kebab-case）とする．ブランチ名に Issue 番号は含めない（紐付けは PR 本文の `Closes #<番号>` で行う）．
-3. `git checkout -b <ブランチ名>` で作業ブランチを作成する．
-
-## ステップ 5: 完了サマリー (Summary)
-
-以下を提示する:
+エージェントの報告をもとに以下を提示する:
 
 - **Issue**: 番号・タイトル・URL
 - **ボード**: In Progress（Project が無い場合は「アサインのみ（ボード未使用）」と表記する）
@@ -58,6 +38,6 @@ Git 規約 `.claude/rules/git-conventions.md` に従う．
 
 ## 注意事項 (Notes)
 
-- branch↔Issue の紐付けは，後の PR 本文の `Closes #<Issue番号>` で行う．ブランチ名には番号を入れない．
-- Projects 操作には `project` スコープが必要．スコープエラーが出たら `gh auth refresh -s project` を実行する（`reference.md`「必要なスコープ」）．
-- 新規 Issue を立てる場合は `/task-create`，Issue 無しで進める場合は本コマンドを使わず直接 `/implement` 等へ．
+- branch↔Issue の紐付けは，後の PR 本文の `Closes #<Issue番号>` で行う．ブランチ名には番号を入れない
+- Projects 操作には `project` スコープが必要．スコープエラーの停止報告が来たら `gh auth refresh -s project` をユーザーに案内する（`reference.md`「必要なスコープ」）
+- 新規 Issue を立てる場合は `/task-create`，Issue 無しで進める場合は本コマンドを使わず直接 `/implement` 等へ

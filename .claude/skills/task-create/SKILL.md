@@ -5,43 +5,37 @@ description: "Issue を作成しボードに追加する（着手はしない）
 argument-hint: "<タスクの説明>"
 ---
 
-あなたはタスク計画担当です．
-`.claude/skills/task-start/reference.md`（Issues・Projects の gh 操作リファレンス）に従い，新しいタスクの Issue を作成してボードに並べてください．
+あなたはタスク計画の司令塔です．Issue の**中身（タイトル・本文）はあなたが作り**，gh での起票・ボード操作は **ops-runner エージェント**（軽量モデル）に委譲します（使用量節約のため，gh 操作を自分では行わない）．
 
-本スキルは **solo / team 両モードで使用できる**．team モードでは GUIDE_03（チーム開発ルール）のタスク管理方針にも従うこと．solo モードでは GUIDE_03 は存在しないため，本スキルと reference.md の記述を基準とする．
+本スキルは **solo / team 両モードで使用できる**．team モードでは GUIDE_03（チーム開発ルール）のタスク管理方針にも従うこと．solo モードでは GUIDE_03 は存在しないため，本スキルと `.claude/skills/task-start/reference.md` の記述を基準とする．
 
 本コマンドは**タスクを事前に定義する**ためのものです．着手は別途 `/task-start <Issue番号>` で行います（または手動で）．Issue はどの段階でも必須ではなく，Issue 無しで進める作業はこのコマンドを使う必要はありません．
 
-## 前提確認 (Pre-check)
+## ステップ 1: 前提確認 (Pre-check)
 
 $ARGUMENTS（タスクの説明）が指定されているか確認する．指定がなければ「タスクの説明を指定してください」と伝えて終了する．
 
-## ステップ 1: Project の特定 (Project Lookup)
+## ステップ 2: Issue 内容の作成 (Compose)
 
-1. リポジトリ所有者を取得する（`gh repo view --json owner --jq .owner.login`）．
-2. Project を特定する（`gh project list --owner <owner>`）．複数ある場合はユーザーに確認する．見つからない場合はその旨を伝え，ステップ 3（ボード追加）は飛ばして進める（Project ボードは既定では未使用のため，無くても問題ない）．
+$ARGUMENTS とセッションの文脈から，Issue タイトルと本文を確定させる（ここが品質の要．委譲しない）．
 
-## ステップ 2: Issue 作成 (Create Issue)
+- **やること**は必ず書く
+- **完了条件（受け入れ基準）**は非自明な場合のみ書く
+- 担当者は**アサインしない**（誰が拾うかは着手時に決まる）
 
-$ARGUMENTS の説明から Issue 本文を組み立てる．
+## ステップ 3: 委譲 (Delegate)
 
-- **やること**は必ず書く．
-- **完了条件（受け入れ基準）**は非自明な場合のみ書く．
-- 担当者は**アサインしない**（誰が拾うかは着手時に決まる）．
+ops-runner エージェントを起動し，プロンプトに以下を含める:
 
-`gh issue create --title "<タイトル>" --body "<本文>"` で作成する．
+- 手順書: `.claude/skills/task-start/reference.md` の「/task-create 実行手順」を読んで従うこと
+- 確定した Issue タイトル・本文（そのまま使い，書き換えないこと）
+- 確認が必要な事態では停止して報告すること
 
-## ステップ 3: ボードに追加 (Add to Board)
-
-`.claude/skills/task-start/reference.md` の「Projects の操作」に従う（Project が無い場合は飛ばす）．
-
-1. `gh project item-add <Project番号> --owner <owner> --url <Issue の URL>` でボードに追加する．
-2. 追加されたアイテムの Status を `Todo` に設定する（`gh project field-list`・`item-list` で必要な ID を取得し `gh project item-edit`）．
-3. `gh project` の書き込み系は成功しても無出力のことがある．`gh project item-list` で結果を確認する（同 reference.md「トラブルシューティング」）．
+エージェントが確認事項（Project が複数ある等）で停止した場合は，ユーザーに確認して再委譲する．
 
 ## ステップ 4: 完了サマリー (Summary)
 
-以下を提示する:
+エージェントの報告をもとに以下を提示する:
 
 - **Issue**: 番号・タイトル・URL
 - **ボード**: Todo（Project が無い場合は「未追加（ボード未使用）」と表記する）
@@ -49,5 +43,5 @@ $ARGUMENTS の説明から Issue 本文を組み立てる．
 
 ## 注意事項 (Notes)
 
-- 複数タスクを一括で作る場合は，本コマンドを複数回実行してください．
-- Projects 操作には `project` スコープが必要．スコープエラーが出たら `gh auth refresh -s project` を実行する（`.claude/skills/task-start/reference.md`「必要なスコープ」）．
+- 複数タスクを一括で作る場合は，本コマンドを複数回実行してください
+- Projects 操作には `project` スコープが必要．スコープエラーの停止報告が来たら `gh auth refresh -s project` をユーザーに案内する（`.claude/skills/task-start/reference.md`「必要なスコープ」）
