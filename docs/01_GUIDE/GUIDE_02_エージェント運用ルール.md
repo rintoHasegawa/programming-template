@@ -27,7 +27,7 @@
 | --- | --- | --- |
 | `ops-runner` | git・gh・検証コマンドの機械的な実行（手順書に忠実に従い，判断が要る事態では停止して報告する） | `/commit`・`/task-create`・`/task-start`・`/task-handoff`・`/deps-update` |
 | `deps-analyst` | 依存更新 1 件の影響分析（破壊的変更の抽出・利用箇所の突き合わせ・推奨対応） | `/deps-update` |
-| `advisor` | 重要な価値判断・設計判断の相談役（Fable による熟考・助言．実装はしない） | `/consult` |
+| `advisor` | 重要な価値判断・設計判断の相談役（Fable による熟考・助言．実装はしない）．Claude が自発的に呼んでよい基準（不可逆な設計判断の直前・同じ失敗が 2 回続いたとき）と上限（1 タスク 2 回，無人ループは 1 起動 3 回）は `/consult` skill に定める | `/consult`（`/auto-refactor`・`/auto-audit` からも上限付きで使用） |
 
 ## パイプラインの流れと人間の役割 (Pipeline & Human's Role)
 
