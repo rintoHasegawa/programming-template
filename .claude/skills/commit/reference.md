@@ -79,19 +79,20 @@ gh pr create --title "[add] 新機能を実装" --body "概要"
 
 - マージ方式は「Create a merge commit」を使用する（作業ブランチの全コミット履歴が `main` に残る）．
   - 「Squash and merge」「Rebase and merge」は使用しない．
+- **先に `main` へ移ってから**マージする．PR ブランチ上で `--delete-branch` を実行すると gh が暗黙に `main` への切替と pull を行い，ブランチ削除より前に pull が走る（post-merge hook 等の後処理が削除前の状態を見てしまう）．手順を明示的にして順序を固定する．
 
 ```bash
-gh pr merge --merge --delete-branch
+git checkout main
+gh pr merge feature/new-function --merge --delete-branch   # リモート・ローカルのブランチも削除される
 ```
 
 ### ローカル環境のクリーンアップ
 
-マージ完了後はローカル環境も最新状態に戻し，古いブランチを削除する．
+マージ完了後はローカルの `main` を最新化する（ブランチ削除の後に pull する順序を守る）．
 
 ```bash
-git checkout main
 git pull origin main
-git branch -d feature/new-function
+git branch -d feature/new-function   # gh が削除済みなら不要（残っていた場合のみ）
 ```
 
 ## トラブルシューティング (Troubleshooting)
