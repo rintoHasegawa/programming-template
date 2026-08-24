@@ -47,7 +47,7 @@ gh issue develop <Issue番号> --name feature/<概要> --base main
 2. **直列運用チェック**: 所有者を取得し Project を特定する（複数なら停止して報告．無ければボード操作を飛ばす）．進行中の作業を数える（Project があれば `item-list` で Status が `In Progress` のもの，無ければ `gh issue list --assignee @me --state open`）．対象 Issue 以外に 1 件以上あれば，該当タスクの一覧を添えて停止して報告する（禁止ではなく原則）
 3. **対象 Issue の確認・アサイン**: `gh issue view <Issue番号>` で内容を確認する（存在しない・クローズ済み・他人がアサイン済みの場合は停止して報告する）．`gh issue edit <Issue番号> --add-assignee @me` で自分をアサインする
 4. **ボードを In Progress へ**: 「Projects の操作」に従い，未追加なら `item-add` → Status を `In Progress` に変更 → `item-list` で結果を確認する（Project が無い場合は飛ばす）
-5. **作業ブランチ作成**: `git checkout main && git pull origin main` で `main` を最新化し，規約どおりのブランチ名（プレフィックス＋英単語 2〜4 語．Issue 番号は含めない）で `git checkout -b <ブランチ名>` する
+5. **作業ブランチ作成**: `git checkout main && git pull origin main` で `main` を最新化し，`git checkout -b <ブランチ名>` する．ブランチ名は司令塔から渡されていればそれを使い，無ければ Issue タイトルから規約どおり（プレフィックス＋英単語 2〜4 語．Issue 番号は含めない）決めて，決めた名前とプレフィックスの選択理由を報告に含める
 6. **報告**: Issue 番号・タイトル・URL・ボード状態・作成したブランチ名を返す
 
 ※ ステップ 1〜3 の停止条件に複数該当する場合は，まとめて 1 回の報告で返す（司令塔との往復を減らす）．司令塔から「ユーザー承認済み」と明示された項目では停止しない．
@@ -61,7 +61,7 @@ gh issue develop <Issue番号> --name feature/<概要> --base main
 1. 所有者を取得し Project を特定する（無くても問題ない）．着手中の Issue を抽出する（Project があれば `item-list` で Status が `In Progress` のもの，無ければ `gh issue list --assignee @me --state open`）
 2. 0 件ならその旨を報告して終了する．複数件なら一覧（番号・タイトル）を確認事項として返す
 3. 対象 Issue について以下を収集して返す:
-   - `gh issue view <Issue番号> --json number,title,body,comments`（本文と過去コメントの要点．過去の進捗メモと重複させないための材料）
+   - `gh issue view <Issue番号> --json number,title,body,comments`（本文と過去コメントを**原文のまま**返す．要約・取捨選択はしない．コメントが多い場合は直近の「進捗メモ」コメントを優先して原文で返し，古いものは件数と日付だけにする）
    - `git branch --show-current`／`git rev-parse --short HEAD`／`git log main..HEAD --oneline`／`git status --porcelain`
 
 ### 投稿フェーズ (Post)

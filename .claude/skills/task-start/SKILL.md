@@ -21,6 +21,7 @@ ops-runner エージェントを起動し，プロンプトに以下を含める
 
 - 手順書: 本スキルの `reference.md`（`.claude/skills/task-start/reference.md`）の「/task-start 実行手順」を読んで従うこと
 - 対象の Issue 番号
+- **ブランチ名**: Issue の内容を把握している場合（同セッションで `/task-create` した直後等）は `.claude/rules/git-conventions.md` の命名規則で決めて渡す．把握していなければ ops-runner に規約どおり提案・作成させ，報告で名前を確認する
 - 確認が必要な事態（未コミット変更・未マージブランチ・進行中タスクあり・他人アサイン等）では，該当項目をまとめて停止・報告すること
 
 ## ステップ 3: 確認の仲介 (Confirm)
