@@ -1,6 +1,6 @@
 ---
 name: setup
-model: opus
+model: inherit
 description: "GUIDE_01 に従い，プロジェクトの立ち上げを対話的に進める．各フェーズでユーザーの確認を挟む．"
 argument-hint: "<プロジェクト名>"
 ---
