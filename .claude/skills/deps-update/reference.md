@@ -2,6 +2,40 @@
 
 `/deps-update`（`SKILL.md`）から参照される，`gh` コマンド・GraphQL クエリ・分類規則・ローカル検証手順・台帳と PR コメントの書式．`{owner}/{repo}` は `gh` がカレントリポジトリから自動補完する．
 
+## 不変条件 (Invariants)
+
+`/deps-update` に関わる全エージェント（司令塔・ops-runner・deps-analyst）が厳守する．
+
+1. **触るのは Dependabot が作った PR だけ**: author が `app/dependabot` の open PR のみを対象にする．人間や他のボットの PR には一切操作しない
+2. **`main` への取り込みは `gh pr merge --merge` のみ**: ローカルで `main` に直接コミット・push しない．依存ファイル（マニフェスト・ロックファイル）を自分で書き換えて別 PR を作ることもしない（競合やビルド失敗の解消は `@dependabot rebase` / `@dependabot recreate` コメントで Dependabot にやり直させる）
+3. **ゲートを満たした PR だけをマージする**（SKILL.md「判定表」）．**メジャー更新は自動マージしない**．検証（CI 緑またはローカル検証）無しにマージしない
+4. **Dependabot PR を close しない**: 不要な PR の整理（supersede・`@dependabot ignore`）は Dependabot と人間に任せる．`@dependabot ignore ...` のコメントも自分では投稿しない（無視は人間の決定）
+5. **作業ツリーを汚さない**: 開始時に作業ツリーがクリーンであることを確認し，ローカル検証で作ったブランチ・マージ状態は必ず破棄し，終了時に開始時のブランチへ戻す
+6. **二重処理しない**: 台帳を読み，既に報告済み・スキップ指定の項目は再報告しない．PR コメントも同じ PR に同じ趣旨で 2 度投稿しない
+7. **ユーザーが起動した時だけ動く**: Claude が自発的に本スキルを呼んではならない（`/loop /deps-update` でのラップはユーザー起動とみなす）
+
+## 実行手順 A: セットアップと収集 (Execution A: Setup & Collect)
+
+司令塔（`/deps-update` のメインループ）から委譲された ops-runner が実行する．振り分けの判断はせず，結果を構造化して返す．
+
+1. **前提の確認**: 「前提の確認」のコマンド一式を実行する．作業ツリーが汚れている・`gh` 未認証・リモートが GitHub でない場合は停止して報告する（stash もしない）．開始時のブランチ名を控える
+2. **検証スイートの特定**: `docs/02_ENV/ENV_04_開発コマンド.md` があればそれを唯一の参照先とする．無ければ構成ファイル（`package.json`，`pubspec.yaml`，`Cargo.toml`，`go.mod`，`pyproject.toml` 等）から依存インストール・テスト・（あれば）ビルド／型チェック／リンタのコマンドを特定する．推測で試さず，特定できなければ「ローカル検証不可」として返す
+3. **台帳の読み込み**: `.claude/deps-update-merged.md`・`.claude/deps-update-report.md`・`.claude/deps-update-skip.md`（無ければ空扱い．`.gitignore` で追跡除外されていなければ追記する）
+4. **収集**: 「PR の収集」「alert の収集」に従い取得する
+5. **分類**: 各 PR を「更新規模の分類」に従い，規模（`patch` / `minor` / `major` / `unknown`）・依存スコープ（本番 / 開発）・種別（security / version）・`mergeable` / `mergeStateStatus`・CI 状況で整理する
+6. **返すもの**: 前提状態（Dependabot 設定・CI の有無・検証スイート・開始ブランチ）・分類付き PR 一覧・alert 一覧（紐づく PR・エラー含む）・台帳の既出項目・skip 該当項目
+
+## 実行手順 B: 検証とマージ (Execution B: Verify & Merge)
+
+司令塔がマージ候補と判定した PR を，指定された順に 1 件ずつ処理する ops-runner の手順．
+
+1. **rebase 依頼のみ指定の PR**: `@dependabot rebase` をコメントして次へ進む（マージしない）
+2. **状態の取り直し**: マージのたびに Dependabot が残りの PR を自動 rebase するため，各 PR の処理前に `mergeable`・CI 状況を取り直す．`CONFLICTING` / `BEHIND` になっていれば rebase 依頼に切り替える
+3. **検証**: CI があれば「CI の完了待ち」，無ければ「ローカル検証」を実行する
+4. **緑の場合**: 「マージ」の手順どおり `gh pr merge <番号> --merge --delete-branch` でマージし，`deps-update-merged.md` へ「台帳の書式」で追記し，ローカル `main` を pull する
+5. **赤・検証不能の場合**: マージせず，失敗したコマンド／チェックの要約を添えて「分析行き」として結果に含める
+6. **後片付け**: 全件終了後，ローカル検証で作ったブランチ・マージ状態を破棄して開始時のブランチへ戻り，`git status --short` が空であることを確認して結果（マージ済み・rebase 依頼済み・分析行き）を返す
+
 ## 前提の確認 (Prerequisites)
 
 ```bash
