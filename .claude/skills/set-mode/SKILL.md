@@ -81,7 +81,9 @@ rm -rf "$TEMP_DIR"
 ]
 ```
 
-Edit 後に `git diff .claude/settings.json` で結果を確認する．
+`hooks` 以外のキー（`permissions` 等）は**追加も削除もせずそのまま保持する**．特に `permissions.allow` の `Bash(gh pr merge:*)` は auto mode で ops-runner にマージを実行させるために必要なため，モード切替で落とさない．
+
+Edit 後に `git diff .claude/settings.json` で結果を確認する（`SessionStart` の追加以外の差分が出ていないことを確認する）．
 
 ### 3-A.3 CLAUDE.md を team 化
 
@@ -115,7 +117,7 @@ rm -f \
 
 ### 3-B.2 settings.json から SessionStart(check_sync) を除去
 
-`.claude/settings.json` を Read し，`check_sync.sh` を呼ぶ `SessionStart` フックのみを除去する．`PreToolUse`（`restrict_repo_access.py`）は保持する．他に個別追加された `SessionStart` フックがあれば残す（`check_sync.sh` の配線だけを外す）．Edit 後に `git diff .claude/settings.json` で確認する．
+`.claude/settings.json` を Read し，`check_sync.sh` を呼ぶ `SessionStart` フックのみを除去する．`PreToolUse`（`restrict_repo_access.py`）は保持する．他に個別追加された `SessionStart` フックがあれば残す（`check_sync.sh` の配線だけを外す）．`hooks` 以外のキー（`permissions` 等）は**そのまま保持する**（`permissions.allow` の `Bash(gh pr merge:*)` は auto mode でマージを実行するために必要）．Edit 後に `git diff .claude/settings.json` で確認する（`SessionStart` の除去以外の差分が出ていないことを確認する）．
 
 ### 3-B.3 CLAUDE.md を solo 化
 

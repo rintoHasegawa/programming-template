@@ -58,6 +58,7 @@
 - **AI に依頼できること**: 環境構築手順書の作成，設定ファイルの生成，`.gitignore` の作成，Dockerfile や devcontainer.json 等の構築用ファイルの作成，GitHub リポジトリのセキュリティ設定・`.github/dependabot.yml` の生成（後述）
 - **GitHub リポジトリのセキュリティ設定**: GitHub の Settings → Code security にある **Dependabot alerts**（既知脆弱性の検出．"Vulnerabilities" として表示される）と **Dependabot security updates** はリポジトリごとに既定で OFF のため，リポジトリを作成したら必ず有効化する．モードに関わらず `/setup` が `gh api` で有効化・検証する（コマンド・検証・トラブル対応は `.claude/skills/setup/reference.md`「GitHub リポジトリのセキュリティ設定」）．`/setup` 時点でリポジトリが無い場合は，`ENV_03_管理者用環境構築手順.md` に転記した同じコマンドをリポジトリ作成後に実行する．
 - **依存バージョン更新（Dependabot version updates）**: 上記とは別に，依存パッケージを定期的に最新化する PR を作らせるため，`/setup` が技術スタックに合わせて `.github/dependabot.yml` を必ず生成する（週 1 回・マイナー／パッチをまとめる・`[update]` プレフィックス．エコシステム対応表と雛形は `.claude/skills/setup/reference.md`「依存バージョン更新の設定」）．Dependabot が作る PR と alert の処理は `/deps-update` で行う（ゲートを満たす PR を自動マージし，メジャー更新等は分析付きで報告．GUIDE_02「コミットルール」の例外）．
+- **Claude Code の権限設定（`.claude/settings.json`）**: auto mode では，`permissions.allow` の広いルール（`Bash(gh *)` 等）は無効化されてセキュリティ分類器に回されるが，操作を特定した狭いルールは分類器より先に解決される．そのため ops-runner（サブエージェント）に `/commit merge`・`/deps-update` のマージを実行させるには `permissions.allow` に `Bash(gh pr merge:*)` が必要である（テンプレート同梱の `settings.json` に含まれる）．**permissions の変更はセッション再起動後に反映される**．また Claude 自身が permissions を編集することは分類器にブロックされるため，追加・変更は人間が手で行う（参考: [auto mode の設定](https://code.claude.com/docs/en/auto-mode-config.md)）．
 - **成果物**:
   - `ENV_02_環境構築手順.md` — メンバーの参加時や環境の再構築時に使う手順
   - `ENV_03_管理者用環境構築手順.md` — プロジェクト作成時に一度だけ行う初期設定（リポジトリ作成，GitHub リポジトリのセキュリティ設定，外部サービスの設定等）
