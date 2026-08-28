@@ -80,6 +80,7 @@ gh pr create --title "[add] 新機能を実装" --body "概要"
 - マージ方式は「Create a merge commit」を使用する（作業ブランチの全コミット履歴が `main` に残る）．
   - 「Squash and merge」「Rebase and merge」は使用しない．
 - **先に `main` へ移ってから**マージする．PR ブランチ上で `--delete-branch` を実行すると gh が暗黙に `main` への切替と pull を行い，ブランチ削除より前に pull が走る（post-merge hook 等の後処理が削除前の状態を見てしまう）．手順を明示的にして順序を固定する．
+- ブランチ保護・必須レビュー・必須チェック未完了でマージが拒否された場合も，`gh pr merge --admin` で迂回しない（状況を報告して停止する）．
 
 ```bash
 git checkout main
@@ -142,6 +143,17 @@ Claude Code にコンフリクトを解消させる場合は，衝突の種類�
 ```bash
 git push --force-with-lease origin feature/new-function
 ```
+
+### gh コマンドが実行される前にブロックされた場合
+
+`gh pr merge` 等が実行される前に遮断され，`gh` の出力が返ってこない場合は，auto mode のセキュリティ分類器によるブロックである．リポジトリ側の制約（ブランチ保護・必須レビュー・権限不足）とは原因が異なるため，混同して報告しない．
+
+- **見分け方**: リポジトリ側の制約ならコマンドは実行され `gh` がエラーメッセージを返す．分類器ブロックではコマンド自体が実行されない．
+- **対処**: `.claude/settings.json` の `permissions.allow` に `Bash(gh pr merge:*)` があるか確認する．無ければ**ユーザーが追加**し，セッションを再起動する（permissions の変更は再起動後に反映される．現状は Claude 自身が `settings.json` の permissions を編集することも分類器にブロックされるため，自分では追加できない）．
+  - 追加の経路は 2 つある: `settings.json` を手で編集する，または `/permissions` ダイアログから allow ルールを追加する．
+  - auto mode では `Bash(gh *)` のような広い allow ルールは分類器に回されるため効かない．`Bash(gh pr merge:*)` のように**操作を特定した狭いルール**にする必要がある．
+  - ※ `~/.claude/settings.json`（ユーザー設定）に `autoMode.classifyAllShell: true` が設定されている場合は，狭い allow ルールも含めすべてのシェルコマンドが分類器に回るため，この対処自体が効かない．allow ルールを追加しても通らないときは，まず該当設定の有無を確認する．
+- **やってはいけないこと**: 別コマンドでの迂回（`main` への直接 push 等）や，設定を緩めての強行．ブロックされた事実と対処法をそのままユーザーに伝えて停止する．
 
 ### 間違えて main にコミットしてしまった場合
 
