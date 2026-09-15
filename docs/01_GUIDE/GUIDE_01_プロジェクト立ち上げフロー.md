@@ -59,6 +59,10 @@
 - **GitHub リポジトリのセキュリティ設定**: GitHub の Settings → Code security にある **Dependabot alerts**（既知脆弱性の検出．"Vulnerabilities" として表示される）と **Dependabot security updates** はリポジトリごとに既定で OFF のため，リポジトリを作成したら必ず有効化する．モードに関わらず `/setup` が `gh api` で有効化・検証する（コマンド・検証・トラブル対応は `.claude/skills/setup/reference.md`「GitHub リポジトリのセキュリティ設定」）．`/setup` 時点でリポジトリが無い場合は，`ENV_03_管理者用環境構築手順.md` に転記した同じコマンドをリポジトリ作成後に実行する．
 - **依存バージョン更新（Dependabot version updates）**: 上記とは別に，依存パッケージを定期的に最新化する PR を作らせるため，`/setup` が技術スタックに合わせて `.github/dependabot.yml` を必ず生成する（週 1 回・マイナー／パッチをまとめる・`[update]` プレフィックス．エコシステム対応表と雛形は `.claude/skills/setup/reference.md`「依存バージョン更新の設定」）．Dependabot が作る PR と alert の処理は `/deps-update` で行う（ゲートを満たす PR を自動マージし，メジャー更新等は分析付きで報告．GUIDE_02「コミットルール」の例外）．
 - **Claude Code の権限設定（`.claude/settings.json`）**: テンプレート同梱の `permissions.allow`（`Bash(gh pr merge:*)`）は，auto mode で ops-runner に `/commit merge`・`/deps-update` のマージを実行させるために必要なので削除しない（変更はセッション再起動後に反映）．マージが分類器に止められた場合の切り分けと対処は `.claude/skills/commit/reference.md`「gh コマンドが実行される前にブロックされた場合」を参照．
+- **スマホへのプッシュ通知（任意）**: テンプレート同梱の `.claude/settings.json` は `inputNeededNotifEnabled`（許可待ち・質問など入力待ちで通知）と `agentPushNotifEnabled`（長い作業の完了など，Claude の判断で通知）を有効にしている．通知は Claude Code の Remote Control 経由で届くため，受け取りたい人は各自で以下を行う（Remote Control を使わない人には影響しない）．
+  - Claude モバイルアプリに，Claude Code と同じ claude.ai アカウントでログインする（API キーでのログインは Remote Control 非対応）
+  - Remote Control の自動接続（`remoteControlAtStartup`）はプロジェクトの settings.json では有効化できない仕様のため，Claude Code を動かす環境ごと（ホスト OS・dev container それぞれ）に `/config` で一度オンにする．dev container ではコンテナ内の `~/.claude` を永続化していないと再ビルドで設定が消える
+  - dev container で `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` を設定していると Remote Control が使えない
 - **成果物**:
   - `ENV_02_環境構築手順.md` — メンバーの参加時や環境の再構築時に使う手順
   - `ENV_03_管理者用環境構築手順.md` — プロジェクト作成時に一度だけ行う初期設定（リポジトリ作成，GitHub リポジトリのセキュリティ設定，外部サービスの設定等）

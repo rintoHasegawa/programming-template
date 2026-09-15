@@ -4,6 +4,8 @@
       "Bash(gh pr merge:*)"
     ]
   },
+  "inputNeededNotifEnabled": true,
+  "agentPushNotifEnabled": true,
   "hooks": {
     "PreToolUse": [
       {
