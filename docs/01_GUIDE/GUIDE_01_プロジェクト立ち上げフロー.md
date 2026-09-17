@@ -59,10 +59,11 @@
 - **GitHub リポジトリのセキュリティ設定**: GitHub の Settings → Code security にある **Dependabot alerts**（既知脆弱性の検出．"Vulnerabilities" として表示される）と **Dependabot security updates** はリポジトリごとに既定で OFF のため，リポジトリを作成したら必ず有効化する．モードに関わらず `/setup` が `gh api` で有効化・検証する（コマンド・検証・トラブル対応は `.claude/skills/setup/reference.md`「GitHub リポジトリのセキュリティ設定」）．`/setup` 時点でリポジトリが無い場合は，`ENV_03_管理者用環境構築手順.md` に転記した同じコマンドをリポジトリ作成後に実行する．
 - **依存バージョン更新（Dependabot version updates）**: 上記とは別に，依存パッケージを定期的に最新化する PR を作らせるため，`/setup` が技術スタックに合わせて `.github/dependabot.yml` を必ず生成する（週 1 回・マイナー／パッチをまとめる・`[update]` プレフィックス．エコシステム対応表と雛形は `.claude/skills/setup/reference.md`「依存バージョン更新の設定」）．Dependabot が作る PR と alert の処理は `/deps-update` で行う（ゲートを満たす PR を自動マージし，メジャー更新等は分析付きで報告．GUIDE_02「コミットルール」の例外）．
 - **Claude Code の権限設定（`.claude/settings.json`）**: テンプレート同梱の `permissions.allow`（`Bash(gh pr merge:*)`）は，auto mode で ops-runner に `/commit merge`・`/deps-update` のマージを実行させるために必要なので削除しない（変更はセッション再起動後に反映）．マージが分類器に止められた場合の切り分けと対処は `.claude/skills/commit/reference.md`「gh コマンドが実行される前にブロックされた場合」を参照．
-- **スマホへのプッシュ通知（任意）**: テンプレート同梱の `.claude/settings.json` は `inputNeededNotifEnabled`（許可待ち・質問など入力待ちで通知）と `agentPushNotifEnabled`（長い作業の完了など，Claude の判断で通知）を有効にしている．通知は Claude Code の Remote Control 経由で届くため，受け取りたい人は各自で以下を行う（Remote Control を使わない人には影響しない）．
-  - Claude モバイルアプリに，Claude Code と同じ claude.ai アカウントでログインする（API キーでのログインは Remote Control 非対応）
-  - Remote Control の自動接続（`remoteControlAtStartup`）はプロジェクトの settings.json では有効化できない仕様のため，Claude Code を動かす環境ごと（ホスト OS・dev container それぞれ）に `/config` で一度オンにする．dev container ではコンテナ内の `~/.claude` を永続化していないと再ビルドで設定が消える
-  - dev container で `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` を設定していると Remote Control が使えない
+- **スマホへのプッシュ通知（任意）**: テンプレート同梱の `.claude/settings.json` は，作業完了（`Stop`．毎ターン）・許可待ち（`Notification`）・質問（`PreToolUse` の `AskUserQuestion`）で `.claude/hooks/notify.py` を呼び，[ntfy](https://ntfy.sh) 経由でスマホに通知する（ホスト OS・dev container のどちらでも動く）．送信先トピックが未設定なら何もしないため，受け取りたい人だけ以下を行う．
+  - スマホに ntfy アプリを入れ，推測されにくいトピック名（例: `claude-` ＋ランダムな英数字）を購読する．トピック名を知っていれば誰でも購読・送信できるため，パスワードと同様に扱いリポジトリには書かない
+  - iPhone でアプリを開くと届いているのにプッシュ通知が出ない場合は，トピックを削除してアプリを再起動し，購読し直す（ntfy の既知の問題．購読し直すと通知の登録がやり直される）
+  - プロジェクトの `.claude/settings.local.json`（gitignore 済み）に `{ "env": { "NTFY_TOPIC": "<トピック名>" } }` を書く．ワークスペースごと dev container に共有されるため，プロジェクトごとに 1 回でよい（反映されない場合はセッションを再起動する）
+  - 外部サービスを経由するため，通知には「Claude Code (リポジトリ名)」（origin リモートが無ければフォルダ名）と定型文だけを送り，コードや会話の内容は送らない
 - **成果物**:
   - `ENV_02_環境構築手順.md` — メンバーの参加時や環境の再構築時に使う手順
   - `ENV_03_管理者用環境構築手順.md` — プロジェクト作成時に一度だけ行う初期設定（リポジトリ作成，GitHub リポジトリのセキュリティ設定，外部サービスの設定等）
