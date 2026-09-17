@@ -53,6 +53,7 @@
 - **前提条件**: 以下のツールは全プロジェクト共通で導入する．
   - `git` — バージョン管理（運用ルールは `.claude/rules/git-conventions.md` で定義）
   - `gh` — GitHub CLI（PR 作成・マージ等に使用）
+  - Python 3.7 以上と `bash` — `.claude/settings.json` のフック（リポジトリ外アクセス制限・通知）の実行に使用．フックは `bash .claude/hooks/run_python.sh` 経由で起動し，`python3` → `python` → `py` の順に実際に起動できるものを使う（いずれか 1 つで起動できればよい．Windows では Git for Windows 付属の `bash` を使う）．※ Python が見つからないとアクセス制限フックが Read・Write・Edit・Glob・Grep・Bash を**すべてブロックする**（通知フックは何もせず素通りする）
 - **基本方針**: 環境の再現性を重視し，手順書だけに頼らず構築を自動化・コード化できる方法を優先する（例: Docker，Dev Containers，Windows Sandbox，IaC ツール等）．
 - **人間が決めること**: 開発マシンの選定，クラウドサービスのアカウント作成，環境構築方法の選択
 - **AI に依頼できること**: 環境構築手順書の作成，設定ファイルの生成，`.gitignore` の作成，Dockerfile や devcontainer.json 等の構築用ファイルの作成，GitHub リポジトリのセキュリティ設定・`.github/dependabot.yml` の生成（後述）
