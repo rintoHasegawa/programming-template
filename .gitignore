@@ -19,6 +19,9 @@
 .claude/deps-update-report.md
 .claude/deps-update-skip.md
 
+# .claude/hooks/ の Python フックとそのテスト（tests/test_hooks.py）が生成するバイトコードキャッシュ
+__pycache__/
+
 # -- プロジェクト立ち上げ時に有効化する（.claude/rules/git-conventions.md 参照） --
 # .env
 # .env.*
