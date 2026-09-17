@@ -12,6 +12,8 @@
 事故から守る）に照らして許可ゾーンにしても失うものがない．
 """
 
+from __future__ import annotations
+
 import json
 import os
 import posixpath

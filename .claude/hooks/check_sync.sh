@@ -6,10 +6,11 @@
 # GUIDE_03「直列運用」「main を常に動作可能」を補助する目的で,
 # 古い main から作業を始めるミスをセッション開始時に可視化する.
 
-# JSON 整形は python3 に任せる (jq 非依存. 既存 hook も python3 を利用).
+# JSON 整形は Python に任せる (jq 非依存. 既存 hook も Python を利用).
+# python3 / python / py の差は run_python.sh が吸収する (見つからなければ非ブロックで失敗).
 emit() {
   local msg="$1"
-  python3 - "$msg" <<'PY'
+  PYTHONIOENCODING=utf-8 bash "$(dirname "$0")/run_python.sh" - "$msg" <<'PY'
 import json, sys
 msg = sys.argv[1]
 print(json.dumps({

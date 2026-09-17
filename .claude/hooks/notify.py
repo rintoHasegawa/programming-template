@@ -9,6 +9,8 @@ settings.json では async で配線しているため，本フックの成否�
 送信に失敗しても黙って終了する．外部サービスを経由するため，本文にコードや会話の内容は含めない．
 """
 
+from __future__ import annotations
+
 import json
 import os
 import subprocess
@@ -56,7 +58,9 @@ def project_name(cwd: str) -> str:
     url = result.stdout.strip().rstrip("/")
     if result.returncode != 0 or not url:
         return folder
-    name = url.replace(":", "/").rsplit("/", 1)[-1].removesuffix(".git")
+    name = url.replace(":", "/").rsplit("/", 1)[-1]
+    if name.endswith(".git"):  # str.removesuffix は 3.9 以降のため使わない
+        name = name[: -len(".git")]
     return name or folder
 
 

@@ -11,7 +11,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python .claude/hooks/restrict_repo_access.py"
+            "command": "bash .claude/hooks/run_python.sh --fail-closed .claude/hooks/restrict_repo_access.py"
           }
         ]
       },
@@ -20,7 +20,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python .claude/hooks/notify.py",
+            "command": "bash .claude/hooks/run_python.sh .claude/hooks/notify.py",
             "async": true
           }
         ]
@@ -32,7 +32,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python .claude/hooks/notify.py",
+            "command": "bash .claude/hooks/run_python.sh .claude/hooks/notify.py",
             "async": true
           }
         ]
@@ -43,7 +43,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python .claude/hooks/notify.py",
+            "command": "bash .claude/hooks/run_python.sh .claude/hooks/notify.py",
             "async": true
           }
         ]
