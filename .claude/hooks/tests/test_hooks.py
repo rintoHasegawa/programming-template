@@ -713,6 +713,9 @@ class TestPython37Compat(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # check_sync.sh: python3 決め打ちではなくラッパー経由
 # ---------------------------------------------------------------------------
+# check_sync.sh は team 層のファイルで，solo モードのプロジェクトには配置されない．
+# 一方このテスト自体は共通層として全プロジェクトに同期されるため，存在ガードで skip する．
+@unittest.skipUnless(os.path.exists(CHECK_SYNC), "check_sync.sh は team 層のため solo には無い")
 class TestCheckSync(TempDirMixin, unittest.TestCase):
     def test_no_hardcoded_python3(self):
         with open(CHECK_SYNC, encoding="utf-8") as f:

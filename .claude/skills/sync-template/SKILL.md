@@ -76,6 +76,8 @@ bash ヘルパーの定義と各ファイルの個別マージ手順は本スキ
 
 ※ `task-create`・`task-start`（+ `reference.md`）・`task-handoff` の各 skill は**共通層**（solo でも Issue ベースのタスク管理に使う）であり，モードに関わらず通常どおり同期する．
 
+※ **共通層のファイルはチーム層ファイルの存在を前提にしてはならない**．前提にする場合は存在ガードを付け，solo では失敗ではなく skip・無効化になるようにする（例: `.claude/hooks/tests/test_hooks.py` の `TestCheckSync` は `check_sync.sh` が無ければ skip する）．この不変条件はメタテスト `.claude/tests/test_mode_layers.py` が検査する．
+
 判定はプロジェクトの `.claude/project-mode`（`solo` または `team`．`/setup` が作成）で行う:
 
 - **`team`**: チーム層ファイルを通常どおり同期（A/M/D すべて反映）．
