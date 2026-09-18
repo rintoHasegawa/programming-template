@@ -60,7 +60,7 @@
 - **GitHub リポジトリのセキュリティ設定**: GitHub の Settings → Code security にある **Dependabot alerts**（既知脆弱性の検出．"Vulnerabilities" として表示される）と **Dependabot security updates** はリポジトリごとに既定で OFF のため，リポジトリを作成したら必ず有効化する．モードに関わらず `/setup` が `gh api` で有効化・検証する（コマンド・検証・トラブル対応は `.claude/skills/setup/reference.md`「GitHub リポジトリのセキュリティ設定」）．`/setup` 時点でリポジトリが無い場合は，`ENV_03_管理者用環境構築手順.md` に転記した同じコマンドをリポジトリ作成後に実行する．
 - **依存バージョン更新（Dependabot version updates）**: 上記とは別に，依存パッケージを定期的に最新化する PR を作らせるため，`/setup` が技術スタックに合わせて `.github/dependabot.yml` を必ず生成する（週 1 回・マイナー／パッチをまとめる・`[update]` プレフィックス．エコシステム対応表と雛形は `.claude/skills/setup/reference.md`「依存バージョン更新の設定」）．Dependabot が作る PR と alert の処理は `/deps-update` で行う（ゲートを満たす PR を自動マージし，メジャー更新等は分析付きで報告．GUIDE_02「コミットルール」の例外）．
 - **Claude Code の権限設定（`.claude/settings.json`）**: テンプレート同梱の `permissions.allow`（`Bash(gh pr merge:*)`）は，auto mode で ops-runner に `/commit merge`・`/deps-update` のマージを実行させるために必要なので削除しない（変更はセッション再起動後に反映）．マージが分類器に止められた場合の切り分けと対処は `.claude/skills/commit/reference.md`「gh コマンドが実行される前にブロックされた場合」を参照．
-- **スマホへのプッシュ通知（任意）**: テンプレート同梱の `.claude/settings.json` は，作業完了（`Stop`．毎ターン）・許可待ち（`Notification`）・質問（`PreToolUse` の `AskUserQuestion`）で `.claude/hooks/notify.py` を呼び，[ntfy](https://ntfy.sh) 経由でスマホに通知する（ホスト OS・dev container のどちらでも動く）．送信先トピックが未設定なら何もしないため，受け取りたい人だけ以下を行う．
+- **スマホへのプッシュ通知（任意）**: テンプレート同梱の `.claude/settings.json` は，作業完了（`Stop`）・許可待ち（`Notification`）・質問（`PreToolUse` の `AskUserQuestion`）で `.claude/hooks/notify.py` を呼び，[ntfy](https://ntfy.sh) 経由でスマホに通知する（ホスト OS・dev container のどちらでも動く）．送信先トピックが未設定なら何もしないため，受け取りたい人だけ以下を行う．
   - スマホに ntfy アプリを入れ，推測されにくいトピック名（例: `claude-` ＋ランダムな英数字）を購読する．トピック名を知っていれば誰でも購読・送信できるため，パスワードと同様に扱いリポジトリには書かない
   - iPhone でアプリを開くと届いているのにプッシュ通知が出ない場合は，トピックを削除してアプリを再起動し，購読し直す（ntfy の既知の問題．購読し直すと通知の登録がやり直される）
   - `{ "env": { "NTFY_TOPIC": "<トピック名>" } }` を以下のいずれかに書く（既存の設定がある場合は `env` にキーを追加する．反映されない場合はセッションを再起動する）
@@ -68,6 +68,8 @@
     - **dev container を使う場合**: プロジェクトの `.claude/settings.local.json`（gitignore 済み）に書く．ホストの `~/.claude` は通常コンテナから見えないが，ワークスペースはコンテナに共有されるため，プロジェクトごとに 1 回でよい
     - 両方に書いた場合はプロジェクトの `.claude/settings.local.json` が優先される
   - 外部サービスを経由するため，通知には「Claude Code (リポジトリ名)」（origin リモートが無ければフォルダ名）と定型文だけを送り，コードや会話の内容は送らない
+  - 完了通知は**ターン終了のたびには送らない**．サブエージェント（`/implement` の coder 等）やワークフローに依頼して待っているだけのターン終了では黙り，依頼した作業が終わって本当に手が空いたときだけ「処理が完了しました」を送る（フックが `Stop` の入力 `background_tasks` を見て判定する）．一方，バックグラウンドのシェル（開発サーバー等）は動かし続けるのが普通で，対象にすると通知が永久に止まるため判定から除いている
+  - 許可待ち・質問の通知は，サブエージェント起因なら本文に「（エージェント: coder）」のようにエージェント名が付く
 - **成果物**:
   - `ENV_02_環境構築手順.md` — メンバーの参加時や環境の再構築時に使う手順
   - `ENV_03_管理者用環境構築手順.md` — プロジェクト作成時に一度だけ行う初期設定（リポジトリ作成，GitHub リポジトリのセキュリティ設定，外部サービスの設定等）

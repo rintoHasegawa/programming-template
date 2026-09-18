@@ -561,6 +561,90 @@ class TestNotifyProjectName(TempDirMixin, unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# notify.build_notification（どのイベントで通知するか）
+# ---------------------------------------------------------------------------
+def _subagent_task(agent_type: str = "coder") -> dict:
+    return {"id": "t1", "type": "subagent", "status": "running", "description": "...", "agent_type": agent_type}
+
+
+class TestNotifyBuildNotification(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        sys.path.insert(0, HOOKS_DIR)
+        try:
+            import notify  # noqa: WPS433
+        finally:
+            sys.path.pop(0)
+        cls.notify = notify
+
+    def build(self, data: dict):
+        return self.notify.build_notification(data)
+
+    # Stop: 依頼したエージェントが動いている間は通知しない
+    def test_stop_without_background_tasks_notifies(self):
+        self.assertIsNotNone(self.build({"hook_event_name": "Stop"}))
+
+    def test_stop_with_empty_background_tasks_notifies(self):
+        self.assertIsNotNone(self.build({"hook_event_name": "Stop", "background_tasks": []}))
+
+    def test_stop_with_running_subagent_is_silent(self):
+        self.assertIsNone(self.build({"hook_event_name": "Stop", "background_tasks": [_subagent_task()]}))
+
+    def test_stop_with_running_workflow_is_silent(self):
+        task = {"id": "w1", "type": "workflow", "status": "running", "description": "...", "name": "wf"}
+        self.assertIsNone(self.build({"hook_event_name": "Stop", "background_tasks": [task]}))
+
+    def test_stop_with_shell_task_still_notifies(self):
+        """開発サーバー等の常駐 shell / monitor で通知が止まらないこと."""
+        for kind in ("shell", "monitor"):
+            with self.subTest(kind=kind):
+                task = {"id": "s1", "type": kind, "status": "running", "description": "..."}
+                self.assertIsNotNone(self.build({"hook_event_name": "Stop", "background_tasks": [task]}))
+
+    def test_stop_with_mixed_tasks_is_silent(self):
+        tasks = [{"id": "s1", "type": "shell", "status": "running", "description": "..."}, _subagent_task()]
+        self.assertIsNone(self.build({"hook_event_name": "Stop", "background_tasks": tasks}))
+
+    def test_stop_with_malformed_background_tasks_notifies(self):
+        """想定外の形（古いバージョン・壊れた入力）でも通知を落とさない."""
+        for tasks in ("not-a-list", {"type": "subagent"}, [None, "x", 1], [{}]):
+            with self.subTest(tasks=tasks):
+                self.assertIsNotNone(self.build({"hook_event_name": "Stop", "background_tasks": tasks}))
+
+    # 待ち状態の通知はエージェント名を添える
+    def test_permission_prompt_from_subagent_names_agent(self):
+        data = {"hook_event_name": "Notification", "notification_type": "permission_prompt",
+                "agent_id": "a1", "agent_type": "coder"}
+        self.assertIn("coder", self.build(data)["message"])
+
+    def test_permission_prompt_from_main_has_no_agent_label(self):
+        data = {"hook_event_name": "Notification", "notification_type": "permission_prompt"}
+        self.assertNotIn("エージェント", self.build(data)["message"])
+
+    def test_question_from_subagent_names_agent(self):
+        data = {"hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion", "agent_type": "tester"}
+        self.assertIn("tester", self.build(data)["message"])
+
+    def test_agent_name_is_trimmed_and_capped(self):
+        data = {"hook_event_name": "Notification", "notification_type": "permission_prompt",
+                "agent_type": "  a" + chr(10) + "b  " + "x" * 200}
+        message = self.build(data)["message"]
+        self.assertNotIn(chr(10), message)
+        self.assertIn("a b", message)
+        self.assertLess(len(message), 80)
+
+    def test_blank_agent_type_is_ignored(self):
+        for value in ("", "   ", None, 123):
+            with self.subTest(value=value):
+                data = {"hook_event_name": "Notification", "notification_type": "idle_prompt", "agent_type": value}
+                self.assertNotIn("エージェント", self.build(data)["message"])
+
+    def test_unknown_event_is_silent(self):
+        self.assertIsNone(self.build({"hook_event_name": "SubagentStop"}))
+        self.assertIsNone(self.build({"hook_event_name": "PreToolUse", "tool_name": "Bash"}))
+
+
+# ---------------------------------------------------------------------------
 # Python 3.7 互換（静的チェック）
 # ---------------------------------------------------------------------------
 PY39_ONLY_ATTRS = {"removesuffix", "removeprefix", "is_relative_to", "with_stem", "readlink", "randbytes", "lcm", "cache"}
