@@ -23,7 +23,7 @@
 
 | レイヤ | 対象 | 存在するモード |
 | --- | --- | --- |
-| 共通層 | `GUIDE_01`・`GUIDE_02`，`.claude/rules/` のすべて，`.claude/agents/`，`.claude/template-overrides.md`（雛形），skills（`commit`（+ `reference.md`）・`implement`・`setup`（+ `reference.md`）・`sync-template`（+ `reference.md`）・`set-mode`・`auto-refactor`・`auto-audit`・`deps-update`（+ `reference.md`）・`task-create`・`task-start`（+ `reference.md`）・`task-handoff`） | solo・team 両方 |
+| 共通層 | `GUIDE_01`・`GUIDE_02`，`.claude/rules/` のすべて，`.claude/agents/`，`.claude/template-overrides.md`（雛形），skills（`commit`（+ `reference.md`）・`implement`・`setup`（+ `reference.md`）・`sync-template`（+ `reference.md`）・`set-mode`・`auto-refactor`・`auto-audit`・`deps-update`（+ `reference.md`）・`verify`（+ `profile-template.md`）・`task-create`・`task-start`（+ `reference.md`）・`task-handoff`） | solo・team 両方 |
 | team 層 | `GUIDE_03`，`.claude/hooks/check_sync.sh`，`settings.json` の SessionStart 配線 | team のみ |
 
 - `.claude/rules/` はすべて共通層だが，進捗記録ルール（`progress-log`）だけは team モードで運用上**上書き**される（進捗は `CLAUDE.md`／`docs/PROGRESS.md` ではなく GitHub Issues と git 履歴で追う．GUIDE_03）．
@@ -56,7 +56,7 @@
   - Python 3.7 以上と `bash` — `.claude/settings.json` のフック（リポジトリ外アクセス制限・通知）の実行に使用．フックは `bash .claude/hooks/run_python.sh` 経由で起動し，`python3` → `python` → `py` の順に実際に起動できるものを使う（いずれか 1 つで起動できればよい．Windows では Git for Windows 付属の `bash` を使う）．※ Python が見つからないとアクセス制限フックが Read・Write・Edit・Glob・Grep・Bash を**すべてブロックする**（通知フックは何もせず素通りする）
 - **基本方針**: 環境の再現性を重視し，手順書だけに頼らず構築を自動化・コード化できる方法を優先する（例: Docker，Dev Containers，Windows Sandbox，IaC ツール等）．
 - **人間が決めること**: 開発マシンの選定，クラウドサービスのアカウント作成，環境構築方法の選択
-- **AI に依頼できること**: 環境構築手順書の作成，設定ファイルの生成，`.gitignore` の作成，Dockerfile や devcontainer.json 等の構築用ファイルの作成，GitHub リポジトリのセキュリティ設定・`.github/dependabot.yml` の生成（後述）
+- **AI に依頼できること**: 環境構築手順書の作成，設定ファイルの生成，`.gitignore` の作成，Dockerfile や devcontainer.json 等の構築用ファイルの作成，GitHub リポジトリのセキュリティ設定・`.github/dependabot.yml` の生成（後述），検証プロファイル（`.claude/verify-profile.md`．任意．後述）の記入
 - **GitHub リポジトリのセキュリティ設定**: GitHub の Settings → Code security にある **Dependabot alerts**（既知脆弱性の検出．"Vulnerabilities" として表示される）と **Dependabot security updates** はリポジトリごとに既定で OFF のため，リポジトリを作成したら必ず有効化する．モードに関わらず `/setup` が `gh api` で有効化・検証する（コマンド・検証・トラブル対応は `.claude/skills/setup/reference.md`「GitHub リポジトリのセキュリティ設定」）．`/setup` 時点でリポジトリが無い場合は，`ENV_03_管理者用環境構築手順.md` に転記した同じコマンドをリポジトリ作成後に実行する．
 - **依存バージョン更新（Dependabot version updates）**: 上記とは別に，依存パッケージを定期的に最新化する PR を作らせるため，`/setup` が技術スタックに合わせて `.github/dependabot.yml` を必ず生成する（週 1 回・マイナー／パッチをまとめる・`[update]` プレフィックス．エコシステム対応表と雛形は `.claude/skills/setup/reference.md`「依存バージョン更新の設定」）．Dependabot が作る PR と alert の処理は `/deps-update` で行う（ゲートを満たす PR を自動マージし，メジャー更新等は分析付きで報告．GUIDE_02「コミットルール」の例外）．
 - **Claude Code の権限設定（`.claude/settings.json`）**: テンプレート同梱の `permissions.allow`（`Bash(gh pr merge:*)`）は，auto mode で ops-runner に `/commit merge`・`/deps-update` のマージを実行させるために必要なので削除しない（変更はセッション再起動後に反映）．マージが分類器に止められた場合の切り分けと対処は `.claude/skills/commit/reference.md`「gh コマンドが実行される前にブロックされた場合」を参照．
@@ -74,6 +74,12 @@
   - `ENV_04_開発コマンド.md`（任意）— アプリの起動・テスト・lint・ビルド等，日常の開発で使うコマンド一覧．人間とエージェント（tester・coder，`/auto-refactor`・`/auto-audit`）がコマンドを推測せずに済むようにするための唯一の参照先とする
     - 立ち上げ時点で確定しているコマンドが無ければ**作成を後回しにしてよい**．実装中にコマンドが確定・変更された時点で作成・追記する（`/implement` の Phase 4 で自動的に見直される）
     - コマンドが増えてきたら，タスクランナー（npm scripts・Makefile 等）への集約を優先し，本ファイルは薄い一覧に保つ（「手順書より自動化・コード化」の基本方針と同じ）
+  - `.claude/verify-profile.md`（任意）— **検証プロファイル**．Claude（`verifier` エージェント）がアプリを操作して動作確認できるようにするための，プロジェクト固有の情報（検証手段・**検証対象の環境**・実行コマンドと出力先・前提条件・認証／ロール・テストデータの規約・既知のノイズ・禁止操作・シナリオのテンプレート）をまとめたファイル
+    - 用意すると `/verify` と `/implement` の Phase 1b が動き，人間の動作確認の前段としてエッジケース等を Claude が先に潰す（人間の確認は無くならない．GUIDE_02）．用意しなければ Phase 1b はスキップされ，従来どおり人間が動作確認する
+    - 雛形 `.claude/skills/verify/profile-template.md` を `.claude/verify-profile.md` にコピーして記入する．シナリオを実行するランナー（起動・実行・集計・後始末）はプロジェクト側に用意する（要件は雛形の「実行基盤の要件」，Web アプリ向けの実装例は同「参考実装」のリンク先）
+    - 検証対象の環境は**既定でローカルのみ**．staging 等の検証用環境を使わせるかは人間が判断し，使わせる場合だけ「いじっても影響が無い」と判断した根拠（本番と DB が分離されている・実ユーザーがいない・外部通知や課金が無効 等）とともに許可リストへ書く．書かれていない環境に Claude は接続しない．**本番はどんな場合も対象外**
+    - 技術スタックと開発コマンドが固まってから作る．立ち上げ時に作らず，必要になった時点で用意してもよい
+    - プロジェクト所有のファイルであり `/sync-template` で上書き・削除されない．検証結果の出力先は `.gitignore` に追加する
 
 ## 仕様設計 (Specification)
 

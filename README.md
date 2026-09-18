@@ -39,7 +39,8 @@ rm README.md
 ## 主なスラッシュコマンド
 
 - `/setup <project-name>` — GUIDE_01 に従いプロジェクト立ち上げを対話的に進行（solo/team を選択．GitHub リポジトリの Dependabot alerts / security updates を `gh api` で有効化し，`.github/dependabot.yml` も生成）
-- `/implement <タスク>` — 実装パイプライン（コーディング → テスト → リファクタリング）
+- `/implement <タスク>` — 実装パイプライン（コーディング →（任意の検証）→ テスト → リファクタリング）
+- `/verify [観点]` — ローカル環境（およびプロファイルが許可した検証用環境）で動作とエッジケースを Claude に確認させ，人間が確認すべき範囲を絞る（検証プロファイル `.claude/verify-profile.md` を用意したプロジェクトのみ．雛形は `.claude/skills/verify/profile-template.md`．人間の動作確認は無くならない）
 - `/commit` / `/commit push` / `/commit merge` — コミット作成（`push` でプッシュと PR 作成まで，`merge` でマージ・プルまで）
 - `/auto-refactor` / `/auto-audit` — 無人運転ループ（リファクタ／ドキュメント整理，バグ／脆弱性の巡回監査）．専用ブランチへ自律コミットし，push・PR・マージはしない
 - `/deps-update` — Dependabot の依存更新 PR と alert を処理（メジャー更新でなく CI／ローカル検証が緑の PR は `main` に自動マージ，メジャー更新・CI 赤・修正版なし alert は影響分析付きで報告．`/deps-update report` で報告のみ）

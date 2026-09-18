@@ -61,8 +61,9 @@ bash ヘルパーの定義と各ファイルの個別マージ手順は本スキ
 | ファイル | 理由 | 方針 |
 | --- | --- | --- |
 | `README.md` | テンプレートの README は GitHub の repo ページ向けのテンプレート紹介用．各プロジェクトは独自の README を持つべき | プロジェクト側にコピー・上書きしない．テンプレート側の追加・変更・削除も無視する |
+| `.claude/tests/`（配下すべて） | テンプレート自身のメタテスト（skill・エージェント定義・README 等がテンプレートとして整合しているかを検証する）．テンプレート固有の内容を前提とするため派生プロジェクトでは必ず失敗する | 同上 |
 
-判定はステップ 5.3 のループ内でマージ必須ファイル判定より先に行う．
+判定はステップ 5.3 のループ内でマージ必須ファイル判定より先に行う．`SKIP_FILES` の末尾が `/` の項目はディレクトリ指定で，配下のすべてのパスに前方一致で適用する（`reference.md`「変数・判定ヘルパー」）．
 
 ## モード依存ファイル (Mode-gated / Team-layer Files)
 
@@ -326,5 +327,5 @@ CHANGED_ENTRIES=$(cd "$TEMP_DIR" && find . -type f -not -path "./.git/*" | sed '
 - 台帳への登録は必ず理由を添える（ユーザーから聞く）．理由の無い登録は次回同期時の判断材料にならない．台帳の書式（パス列はバッククォート囲み，方針列は `keep` / `merge` / `ask`）を崩さない
 - 同期対象外ファイル（`README.md`）はテンプレート紹介用のためプロジェクトには反映しない．テンプレート側で追加・変更・削除があってもプロジェクトの該当ファイルは触らない
 - チーム層ファイル（`GUIDE_03`／`check_sync.sh`）は `.claude/project-mode` が `team` のプロジェクトにのみ同期する．`task-*` skill は共通層のためモードに関わらず同期する．`solo`（または未設定）のプロジェクトには配置・更新・削除いずれもしない．`/sync-template` は「版の追従」のみを行い，**モードの切り替えはしない**．solo↔team の切替は `/set-mode <solo|team>` を使う（team 層ファイルの配置／削除・`settings.json` 配線・`CLAUDE.md` の team 化／solo 化・`project-mode` 更新を一括で行う）．`.claude/project-mode` を手で書き換えるだけでは切り替わらない
-- テンプレートが管理するのは `.claude/` 配下のうち `agents/`，`skills/`，`rules/`，`hooks/`，`settings.json`，`template-sync-sha`，`template-overrides.md`（雛形のみ．登録内容はプロジェクト固有）のみ．`.claude/plans/` や `.claude/commit-context.md` 等のプロジェクト固有ファイルはテンプレートに含まれないため同期対象外
+- テンプレートが管理するのは `.claude/` 配下のうち `agents/`，`skills/`，`rules/`，`hooks/`，`settings.json`，`template-sync-sha`，`template-overrides.md`（雛形のみ．登録内容はプロジェクト固有）のみ．`.claude/plans/`・`.claude/commit-context.md`・`.claude/verify-profile.md`（検証プロファイル．テンプレートが持つのは雛形 `.claude/skills/verify/profile-template.md` のみ）等のプロジェクト固有ファイルはテンプレートに含まれないため同期対象外（`$CHANGED_ENTRIES` に現れず，コピー・上書き・削除のいずれも起きない）
 - `chore/sync-template` ブランチは他の作業ブランチと混ぜず，作成後は速やかにマージすること．複数の作業ブランチで `/sync-template` を実行すると `.claude/template-sync-sha` がコンフリクトする．コンフリクト時は新しい（HEAD 側の）SHA を採用すること．

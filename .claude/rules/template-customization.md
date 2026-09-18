@@ -12,6 +12,7 @@ paths: [".claude/agents/**", ".claude/skills/**", ".claude/rules/**", ".claude/h
 - **対象（テンプレートが管理するファイル）**: `.claude/agents/`，`.claude/skills/`（テンプレート提供の skill），`.claude/rules/`（`git-conventions`・`markdown-style`・`docs-naming`・`progress-log`・本ルール等，テンプレート由来のもの），`.claude/hooks/`，`docs/01_GUIDE/`（`GUIDE_01`〜`GUIDE_03`）
 - **対象外**:
   - プロジェクトが新規に作ったファイル（立ち上げ時に作成するコーディング規約 rule，プロジェクト独自の skill / agent 等）．テンプレートに存在しないので同期で上書きされない
+  - `.claude/verify-profile.md`（検証プロファイル）．テンプレートが持つのは雛形（`.claude/skills/verify/profile-template.md`）だけであり，プロファイル本体はプロジェクト所有のため同期で触られない．台帳登録は不要
   - `CLAUDE.md`・`.gitignore`・`docs/PROGRESS.md`・`.gitattributes`・`.claude/settings.json`．これらは `/sync-template` の「マージ必須ファイル」として別途保護されており，台帳登録は不要
 - テンプレート由来かどうか判断に迷う場合は**記録する側に倒す**．余計な記録は `/sync-template` が「テンプレート側に存在しないパス」として警告してくれるが，記録漏れは改変の消失につながる
 
