@@ -30,6 +30,14 @@
 - team 層ファイルの配置・削除は `/set-mode` が一括で行い，`/sync-template` は `.claude/project-mode` を見て team 層の同期可否を判定する．team 層ファイルの正確なリストは `/set-mode`・`/sync-template` の定義に持たせており，増減時は両者を一致させること．
 - テンプレート由来のファイルをプロジェクトの都合で意図的に変更した場合は，`.claude/template-overrides.md`（テンプレート改変台帳）に方針（`keep` / `merge` / `ask`）と理由を記録する（`.claude/rules/template-customization.md`）．`/sync-template` は台帳を読み，登録ファイルをテンプレート版で上書きせず方針に従って処理する．未登録でも前回同期版から改変されたファイルは上書き前に確認される．
 
+## 立ち上げ中の Git 運用 (Git During Setup)
+
+立ち上げ作業は専用ブランチ `chore/project-setup` の上で行い，**各フェーズの成果物が確定（ユーザーが承認）した時点でコミットする**（フェーズごとに 1 コミット）．`/setup` が Git 規約（`.claude/rules/git-conventions.md`）の書式でコミットまで行い，`git push`・PR 作成・マージ・`main` への直接コミットは行わない．手順とフェーズごとのコミットメッセージ例は `.claude/skills/setup/reference.md`「フェーズごとのコミット」にある．
+
+- 狙いは，立ち上げの成果物をフェーズ単位でレビュー・巻き戻しできる形にし，中断・再開しても「どこまで終わったか」が git 履歴から辿れるようにすること
+- 全フェーズ完了後，`main` への取り込みはユーザーが `/commit push`（PR 作成まで）または `/commit merge`（マージまで）で行う
+- これは CLAUDE.md「Git 運用」の「`/commit` 自発実行禁止」に対するユーザー承認済みの例外（`/auto-refactor`・`/auto-audit` と同格）であり，`chore/project-setup` ブランチへのコミットに限る
+
 ## 方針決定 (Direction)
 
 プロジェクトの全体像を明確にする．
@@ -56,6 +64,10 @@
   - Python 3.7 以上と `bash` — `.claude/settings.json` のフック（リポジトリ外アクセス制限・通知）の実行に使用．フックは `bash .claude/hooks/run_python.sh` 経由で起動し，`python3` → `python` → `py` の順に実際に起動できるものを使う（いずれか 1 つで起動できればよい．Windows では Git for Windows 付属の `bash` を使う）．※ Python が見つからないとアクセス制限フックが Read・Write・Edit・Glob・Grep・Bash を**すべてブロックする**（通知フックは何もせず素通りする）
 - **基本方針**: 環境の再現性を重視し，手順書だけに頼らず構築を自動化・コード化できる方法を優先する（例: Docker，Dev Containers，Windows Sandbox，IaC ツール等）．
 - **人間が決めること**: 開発マシンの選定，クラウドサービスのアカウント作成，環境構築方法の選択
+- **実際の構築まで行う**: 手順書を書いて終わりにせず，`/setup` がその手順に従って実際に環境を構築し，実行して分かった誤り・前提の抜けを手順書に反映する（未検証の手順書は誤りを含みやすく，最初に詰まるのがその場のユーザーになるため）．区分は次の 3 つ（詳細は `.claude/skills/setup/reference.md`「環境構築の実行」）
+  - リポジトリ内で完結する操作（プロジェクト初期化・依存インストール・設定ファイル生成・ビルドや起動の疎通確認・`gh` でのリポジトリ設定）はそのまま実行する
+  - ツール導入（SDK・ランタイム・CLI のインストール，`docker build`，dev container の起動）は実行するコマンド・バージョン・入る場所を提示して**都度承認を得てから**実行する
+  - 外部サービスのコンソール操作・アカウント作成・対話ログイン（`gh auth login` 等）・クレデンシャルの発行はユーザーが行う
 - **AI に依頼できること**: 環境構築手順書の作成，設定ファイルの生成，`.gitignore` の作成，Dockerfile や devcontainer.json 等の構築用ファイルの作成，GitHub リポジトリのセキュリティ設定・`.github/dependabot.yml` の生成（後述），検証プロファイル（`.claude/verify-profile.md`．任意．後述）の記入
 - **GitHub リポジトリのセキュリティ設定**: GitHub の Settings → Code security にある **Dependabot alerts**（既知脆弱性の検出．"Vulnerabilities" として表示される）と **Dependabot security updates** はリポジトリごとに既定で OFF のため，リポジトリを作成したら必ず有効化する．モードに関わらず `/setup` が `gh api` で有効化・検証する（コマンド・検証・トラブル対応は `.claude/skills/setup/reference.md`「GitHub リポジトリのセキュリティ設定」）．`/setup` 時点でリポジトリが無い場合は，`ENV_03_管理者用環境構築手順.md` に転記した同じコマンドをリポジトリ作成後に実行する．
 - **依存バージョン更新（Dependabot version updates）**: 上記とは別に，依存パッケージを定期的に最新化する PR を作らせるため，`/setup` が技術スタックに合わせて `.github/dependabot.yml` を必ず生成する（週 1 回・マイナー／パッチをまとめる・`[update]` プレフィックス．エコシステム対応表と雛形は `.claude/skills/setup/reference.md`「依存バージョン更新の設定」）．Dependabot が作る PR と alert の処理は `/deps-update` で行う（ゲートを満たす PR を自動マージし，メジャー更新等は分析付きで報告．GUIDE_02「コミットルール」の例外）．
