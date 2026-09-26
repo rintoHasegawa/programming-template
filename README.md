@@ -11,7 +11,7 @@ Claude Code と協働でプロジェクトを立ち上げ・実装するため�
 
 ## Quick Start
 
-新規プロジェクトを始めるときは，以下の手順でテンプレートをカレントディレクトリに展開し，履歴を引き継がない新規リポジトリとして初期化する．
+新規プロジェクトを始めるときは，以下の手順でテンプレートをカレントディレクトリに展開し，履歴を引き継がない新規リポジトリとして初期化する（bash 前提．Windows の PowerShell で実行する場合は後述の読み替えに従う）．
 
 ```bash
 # 1. プロジェクトディレクトリを作成して移動
@@ -31,6 +31,24 @@ git init -b main
 # 5. テンプレート紹介用 README をプロジェクトから削除
 rm README.md
 ```
+
+### Windows (PowerShell) の場合
+
+PowerShell では手順 4 の `rm -rf .git` が失敗する（`rm` は `Remove-Item` のエイリアスであり `-rf` を解釈しないため，「パラメーター名 'rf' と一致するパラメーターが見つかりません」となる）．Git Bash で上記をそのまま実行するか，以下に読み替える．
+
+```powershell
+mkdir <project-name>
+cd <project-name>
+git clone https://github.com/rintoHasegawa/programming-template.git .
+git rev-parse HEAD | Set-Content -Encoding utf8 .claude\template-sync-sha
+Remove-Item -Recurse -Force .git
+git init -b main
+Remove-Item README.md
+```
+
+- `Remove-Item -Recurse -Force` が bash の `rm -rf` に相当する．`.git` は隠し属性のため `-Force` が必須
+- 手順 3 をリダイレクト `>` で書くと，Windows PowerShell 5.1 では UTF-16LE で出力され `/sync-template` が `.claude/template-sync-sha` を読めなくなる．`Set-Content -Encoding utf8` を使う（PowerShell 7 では `>` でも UTF-8 なので問題ない）
+- ※ `.git` の削除は取り消せない．テンプレートのクローン直後（手順 4）以外で実行しないこと
 
 その後 Claude Code を起動し，`/setup <project-name>` でプロジェクト立ち上げを開始する．`/setup` の冒頭で **solo / team のモードを選択**する（選択結果は `.claude/project-mode` に記録され，以降の `/sync-template` がモードに応じてチーム層ファイルを出し分ける）．以降，テンプレートの更新を取り込むときは `/sync-template` を実行する．
 
