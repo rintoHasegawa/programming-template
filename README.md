@@ -56,7 +56,7 @@ Remove-Item README.md
 
 ## 主なスラッシュコマンド
 
-- `/setup <project-name>` — GUIDE_01 に従いプロジェクト立ち上げを対話的に進行（solo/team を選択．GitHub リポジトリの Dependabot alerts / security updates を `gh api` で有効化し，`.github/dependabot.yml` も生成）
+- `/setup <project-name>` — GUIDE_01 に従いプロジェクト立ち上げを対話的に進行（solo/team を選択．環境構築は手順書を書いた後に実際に構築まで行う．フェーズごとに `chore/project-setup` ブランチへコミット．GitHub リポジトリの Dependabot alerts / security updates を `gh api` で有効化し，`.github/dependabot.yml` も生成）
 - `/implement <タスク>` — 実装パイプライン（コーディング →（任意の検証）→ テスト → リファクタリング）
 - `/verify [観点]` — ローカル環境（およびプロファイルが許可した検証用環境）で動作とエッジケースを Claude に確認させ，人間が確認すべき範囲を絞る（検証プロファイル `.claude/verify-profile.md` を用意したプロジェクトのみ．雛形は `.claude/skills/verify/profile-template.md`．人間の動作確認は無くならない）
 - `/commit` / `/commit push` / `/commit merge` — コミット作成（`push` でプッシュと PR 作成まで，`merge` でマージ・プルまで）
