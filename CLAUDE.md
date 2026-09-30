@@ -16,8 +16,7 @@
 - ブランチ名・コミットメッセージの書式は `.claude/rules/git-conventions.md` に従う（常時ロードされる）
 - コミットは `/commit` を使用する（push・PR 作成は `/commit push`，マージ・プルまで行う場合は `/commit merge`）
 - **`/commit` はユーザーが明示的に指示した時のみ実行する．Claude が自発的に `/commit` や `git commit` を呼んではならない**（`/implement` 完了後も，案内するだけで自分ではコミットしない．`/commit` skill は `disable-model-invocation` によりユーザー起動限定として強制されている）
-  - **例外**: 以下（プロジェクト立ち上げと無人運転ループ）はユーザー承認済みの例外として専用ブランチに自律コミットする．いずれも push・PR・マージ・`main` への操作はしない（取り込みは人間が `/commit push` 等で行う）
-    - `/setup`（プロジェクト立ち上げ）→ `chore/project-setup` 専用ブランチ（フェーズごとに 1 コミット）
+  - **例外**: 以下（無人運転ループ）はユーザー承認済みの例外として専用ブランチに自律コミットする．いずれも push・PR・マージ・`main` への操作はしない（取り込みは人間が `/commit push` 等で行う）
     - `/auto-refactor`（リファクタ／ドキュメント整理ループ）→ `refactor/` 専用ブランチ
     - `/auto-audit`（バグ／脆弱性の巡回監査ループ）→ `fix/` 専用ブランチ
   - **例外（`main` へのマージ）**: `/deps-update` は，Dependabot が作成した依存更新 PR に限り，ゲート（メジャー更新でない・競合なし・CI 緑またはローカル検証緑）を満たすものを `gh pr merge` で `main` に取り込む（ユーザーが明示的に起動した時のみ．メジャー更新・CI 赤・PR が付かない alert は報告して人間が判断する）

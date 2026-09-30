@@ -1,12 +1,19 @@
-"""/setup のフェーズごとのコミットと環境構築の実行のテスト.
+"""/setup の「書き出してからレビュー」・コミットの人間への委譲・環境構築の実行のテスト.
 
 実行（リポジトリルートで）:
     python -B -m unittest discover -s .claude/tests -v
 
-仕様の正本（ユーザーが承認した追加仕様）:
-    1. `/setup` は各フェーズが終わるたびに，専用ブランチ `chore/project-setup` へコミットする
-       （push・PR 作成・マージ・`main` への直接コミットはしない．取り込みは完了後に人間が `/commit` で行う）
-    2. フェーズ 3 で環境構築の手順書ができた時点で，その手順に従って実際に環境を構築する
+仕様の正本（Issue #47 および直前の承認済み仕様）:
+    1. `/setup` は各フェーズの成果物を最初から保存先ファイルに書き出し，チャットには
+       「書き出したファイル一覧」と「判断してほしい点・Claude が決めた点」だけを示す（全文を出さない）．
+       修正指示はファイルに直接反映する
+    2. `/setup` はフェーズごとの自動コミットをしない．コミットは人間が `/commit` で行う
+       （`chore/project-setup` ブランチの作成は `/setup` がしてよい．push・PR・マージもしない）
+    3. 次のフェーズへは作業ツリーがクリーンなことを確認してから進む．未コミットのまま進むかは人間に確認する
+    4. `/setup` は `/commit` 自発実行禁止の例外ではない（CLAUDE.md・GUIDE_02 の例外リストに無い．
+       無人運転ループ `/auto-refactor`・`/auto-audit` の例外は残る）
+    5. フェーズ 3 で環境構築の手順書ができた時点で，その手順に従って実際に環境を構築し，
+       結果を手順書に反映してからレビューを受ける
        （リポジトリ内で完結する操作はそのまま実行／ツール導入は都度承認／外部サービス操作はユーザー）
 
 対象は実行コードではなく指示書（Markdown）であるため，各テストは「仕様が要求する性質が，
@@ -62,53 +69,162 @@ def section(text: str, title_part: str) -> str:
     return "\n".join(lines[start:])
 
 
-class TestSetupSkillCommitsEachPhase(unittest.TestCase):
-    """仕様 1: フェーズごとのコミットが `/setup` の手順に組み込まれていること."""
+def numbered_steps(body: str) -> list[str]:
+    """節の直下（最初の下位見出しより前）にある番号付き手順を返す."""
+    steps = []
+    for line in body.splitlines():
+        if HEADING_RE.match(line):
+            break
+        if re.match(r"^\d+\. ", line):
+            steps.append(line)
+    return steps
+
+
+class TestSetupSkillWritesFilesBeforeReview(unittest.TestCase):
+    """仕様 1: 成果物を最初からファイルに書き出し，チャットには一覧と要確認点だけを示すこと."""
 
     @classmethod
     def setUpClass(cls):
         cls.text = read(SETUP_SKILL)
+        cls.rules = section(cls.text, "基本ルール")
 
-    def test_has_git_section_with_dedicated_branch(self):
-        body = section(self.text, "立ち上げ中の Git 運用")
-        self.assertIn(SETUP_BRANCH, body)
-        self.assertIn("フェーズ", body)
+    def test_basic_rules_write_to_file_first(self):
+        self.assertRegex(self.rules, r"最初から.*書き出")
+        self.assertIn("レビュー", self.rules)
 
-    def test_states_no_push_pr_merge(self):
-        body = section(self.text, "立ち上げ中の Git 運用")
-        for word in ("push", "PR", "マージ"):
+    def test_basic_rules_forbid_full_text_in_chat(self):
+        self.assertRegex(self.rules, r"全文を出さ(ない|ず)")
+        self.assertIn("書き出したファイルの一覧", self.rules)
+        self.assertIn("判断してほしい点", self.rules)
+        self.assertIn("Claude が決めた点", self.rules)
+
+    def test_basic_rules_apply_fixes_to_file_directly(self):
+        self.assertIn("ファイルに直接反映", self.rules)
+
+    def test_no_longer_drafts_in_chat_before_writing(self):
+        # 旧仕様「ドラフトを提示し，修正を反映してからファイルに書き出す」が残っていないこと
+        self.assertNotRegex(self.text, r"ドラフトを提示")
+        self.assertNotIn("反映してからファイルに書き出す", self.text)
+
+    def test_phase_loop_writes_file_before_user_review(self):
+        steps = numbered_steps(section(self.text, "フェーズ 1〜6"))
+        write_idx = next((i for i, s in enumerate(steps) if "書き出" in s), None)
+        review_idx = next((i for i, s in enumerate(steps) if "修正指示" in s), None)
+        self.assertIsNotNone(write_idx, f"書き出しのステップが無い: {steps}")
+        self.assertIsNotNone(review_idx, f"修正指示のステップが無い: {steps}")
+        self.assertLess(write_idx, review_idx, "書き出しがレビュー（修正指示）より後になっている")
+        self.assertRegex(steps[write_idx], r"全文.*出さない")
+        self.assertIn("ファイルに反映", steps[review_idx])
+
+    def test_dialogue_template_lists_files_and_points(self):
+        body = section(self.text, "台詞テンプレート")
+        for word in ("書き出したファイル", "判断してほしい点", "Claude が決めた点", "git diff"):
             with self.subTest(word=word):
                 self.assertIn(word, body)
-        self.assertIn("/commit push", body)
 
-    def test_declares_exception_to_commit_prohibition(self):
-        body = section(self.text, "立ち上げ中の Git 運用")
-        self.assertIn("例外", body)
+
+class TestSetupSkillLeavesCommitToHuman(unittest.TestCase):
+    """仕様 2〜4: `/setup` は自動コミットせず，人間の `/commit` を案内し，クリーン確認をすること."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = read(SETUP_SKILL)
+        cls.git = section(cls.text, "立ち上げ中の Git 運用")
+
+    def test_has_git_section_with_dedicated_branch(self):
+        self.assertIn(SETUP_BRANCH, self.git)
+        self.assertIn("フェーズ", self.git)
+
+    def test_may_create_setup_branch(self):
+        lines = [line for line in self.git.splitlines() if SETUP_BRANCH in line and "作成" in line]
+        self.assertTrue(lines, "ブランチ作成を /setup が行ってよい旨が無い")
+
+    def test_states_no_commit_push_pr_merge(self):
+        lines = [line for line in self.git.splitlines() if "行わない" in line]
+        self.assertTrue(lines, "行わない操作の明記が無い")
+        joined = "\n".join(lines)
+        for word in ("git commit", "push", "PR", "マージ"):
+            with self.subTest(word=word):
+                self.assertIn(word, joined)
+        self.assertIn("/commit push", self.git)
+
+    def test_commit_is_done_by_user_via_commit_skill(self):
+        self.assertRegex(self.git, r"ユーザー(自身)?が\s*`/commit`")
+
+    def test_does_not_declare_exception_to_commit_prohibition(self):
+        self.assertNotIn("例外", self.git)
+        self.assertNotIn("自律コミット", self.text)
+        self.assertNotIn("自動コミット", self.text)
+
+    def test_never_instructs_git_commit_command(self):
+        self.assertNotIn("git commit -m", self.text)
+        self.assertNotIn("git add", self.text)
+
+    def test_checks_clean_worktree_before_next_phase(self):
+        self.assertIn("git status --porcelain", self.git)
+        self.assertIn("クリーン", self.git)
+
+    def test_asks_user_when_uncommitted_changes_remain(self):
+        lines = [line for line in self.git.splitlines() if "未コミット" in line]
+        self.assertTrue(lines, "未コミットの場合の扱いが無い")
+        self.assertIn("ユーザーに確認", lines[0])
+
+    def test_phase_loop_guides_commit_then_checks_clean(self):
+        steps = numbered_steps(section(self.text, "フェーズ 1〜6"))
+        commit_idx = next((i for i, s in enumerate(steps) if "`/commit`" in s), None)
+        clean_idx = next((i for i, s in enumerate(steps) if "クリーン" in s), None)
+        self.assertIsNotNone(commit_idx, f"/commit を案内するステップが無い: {steps}")
+        self.assertIsNotNone(clean_idx, f"クリーン確認のステップが無い: {steps}")
+        self.assertIn("案内", steps[commit_idx])
+        self.assertLess(commit_idx, clean_idx)
+        self.assertIn("ユーザーに確認", steps[clean_idx])
+        self.assertEqual(clean_idx, len(steps) - 1, "クリーン確認が次フェーズへ進む直前のステップでない")
+
+    def test_dialogue_template_guides_commit_with_message_example(self):
+        body = section(self.text, "台詞テンプレート")
         self.assertIn("`/commit`", body)
+        self.assertIn("メッセージ例", body)
 
-    def test_phase_loop_includes_commit_step(self):
-        body = section(self.text, "フェーズ 1〜6")
-        steps = [line for line in body.splitlines() if re.match(r"^\d+\. ", line)]
-        self.assertTrue(steps, "フェーズの手順が箇条書きで見つからない")
-        self.assertTrue(
-            any("コミット" in s for s in steps),
-            f"フェーズの手順にコミットのステップが無い: {steps}",
-        )
-
-    def test_phase7_commits_and_hands_merge_to_user(self):
+    def test_phase7_guides_commit_and_hands_merge_to_user(self):
         body = section(self.text, "フェーズ 7")
-        self.assertIn("コミット", body)
+        self.assertIn("`/commit`", body)
         self.assertIn(SETUP_BRANCH, body)
         self.assertRegex(body, r"/commit (push|merge)")
+        self.assertIn("本スキルでは行わず", body)
 
-    def test_interruption_commits_before_stopping(self):
+    def test_interruption_guides_commit_without_committing(self):
         body = section(self.text, "中断時の処理")
-        self.assertIn("コミット", body)
+        self.assertIn("本スキルではコミットしない", body)
+        self.assertIn("`/commit`", body)
         self.assertIn(SETUP_BRANCH, body)
+        self.assertIn("未コミット", body)
+
+    def test_resume_checks_uncommitted_changes(self):
+        body = section(self.text, "前提確認")
+        self.assertIn("git status --porcelain", body)
+        self.assertIn("/commit", body)
+
+
+class TestSetupPhase3ReviewsAfterExecution(unittest.TestCase):
+    """仕様 5: フェーズ 3 は構築を実行し，結果を手順書に反映してからレビューを受けること."""
+
+    def test_phase3_note_orders_execute_reflect_review(self):
+        body = section(read(SETUP_SKILL), "フェーズ 3（環境構築）の注意")
+        i_exec = body.find("構築を実行")
+        i_reflect = body.find("反映", i_exec)
+        i_review = body.find("レビュー", i_reflect)
+        self.assertNotEqual(i_exec, -1, "構築を実行する旨が無い")
+        self.assertNotEqual(i_reflect, -1, "実行後に手順書へ反映する旨が無い")
+        self.assertNotEqual(i_review, -1, "反映後にレビューを受ける旨が無い")
+
+    def test_reference_phase3_single_commit_after_reflection(self):
+        body = section(read(SETUP_REFERENCE), "フェーズごとのコミット")
+        line = next((l for l in body.splitlines() if l.startswith("- フェーズ 3")), "")
+        self.assertIn("反映してからレビュー", line)
 
 
 class TestSetupReferenceDescribesCommitProcedure(unittest.TestCase):
-    """仕様 1: 実行手順（ブランチの作り方・フェーズ対応表）が reference.md にあること."""
+    """仕様 2・3: ブランチの作り方・コミットの案内・クリーン確認・フェーズ対応表が reference.md にあること."""
 
     @classmethod
     def setUpClass(cls):
@@ -119,9 +235,22 @@ class TestSetupReferenceDescribesCommitProcedure(unittest.TestCase):
         self.assertIn(f"git switch -c {SETUP_BRANCH}", self.body)
         self.assertIn("git branch --show-current", self.body)
 
-    def test_shows_commit_command_following_git_conventions(self):
-        self.assertIn("git commit -m", self.body)
+    def test_guides_user_commit_following_git_conventions(self):
+        self.assertIn("`/commit`", self.body)
+        self.assertRegex(self.body, r"ユーザー(自身)?が\s*`/commit`")
         self.assertIn(".claude/rules/git-conventions.md", self.body)
+
+    def test_no_git_commit_command_for_setup_to_run(self):
+        self.assertNotIn("git commit -m", self.body)
+        self.assertNotIn("git add", self.body)
+        self.assertRegex(self.body, r"`git commit`[^\n]*行わない")
+
+    def test_shows_clean_check_command(self):
+        self.assertIn("git status --porcelain", self.body)
+        self.assertIn("ユーザーに確認", self.body)
+
+    def test_does_not_claim_exception(self):
+        self.assertNotIn("例外", self.body)
 
     def test_commit_table_covers_every_phase(self):
         rows = [line for line in self.body.splitlines() if line.startswith("| ")]
@@ -147,7 +276,7 @@ class TestSetupReferenceDescribesCommitProcedure(unittest.TestCase):
 
 
 class TestSetupExecutesEnvironmentSetup(unittest.TestCase):
-    """仕様 2: 手順書の作成後に実際の環境構築を行うことが定義されていること."""
+    """仕様 5: 手順書の作成後に実際の環境構築を行うことが定義されていること."""
 
     @classmethod
     def setUpClass(cls):
@@ -199,7 +328,7 @@ class TestSetupExecutesEnvironmentSetup(unittest.TestCase):
 
 
 class TestDocumentationIsConsistent(unittest.TestCase):
-    """GUIDE・CLAUDE.md・README が同じ 2 つの仕様を述べていること."""
+    """GUIDE・CLAUDE.md・README が同じ仕様を述べていること."""
 
     def test_guide_01_has_git_during_setup_section(self):
         body = section(read(GUIDE_01), "立ち上げ中の Git 運用")
@@ -213,21 +342,58 @@ class TestDocumentationIsConsistent(unittest.TestCase):
         self.assertIn("都度承認", body)
         self.assertIn(".claude/skills/setup/reference.md", body)
 
-    def test_guide_02_lists_setup_as_commit_exception(self):
+    def test_guide_01_git_section_leaves_commit_to_human(self):
+        body = section(read(GUIDE_01), "立ち上げ中の Git 運用")
+        self.assertRegex(body, r"人間が\s*`/commit`")
+        self.assertNotIn("例外", body)
+        self.assertIn("クリーン", body)
+        self.assertRegex(body, r"最初から.*書き出")
+        self.assertIn("判断してほしい点", body)
+        self.assertIn("Claude が決めた点", body)
+
+    def test_guide_02_does_not_list_setup_as_commit_exception(self):
         body = section(read(GUIDE_02), "コミットルール")
         lines = [line for line in body.splitlines() if "`/setup`" in line]
-        self.assertTrue(lines, "GUIDE_02 のコミットルールに /setup の例外が無い")
-        self.assertIn(SETUP_BRANCH, lines[0])
+        self.assertFalse(lines, f"GUIDE_02 のコミットルールに /setup の例外が残っている: {lines}")
+        self.assertNotIn("例外（プロジェクト立ち上げ）", body)
+        self.assertNotIn(SETUP_BRANCH, body)
 
-    def test_claude_md_lists_setup_in_commit_exceptions(self):
+    def test_guide_02_keeps_unattended_loop_exceptions(self):
+        body = section(read(GUIDE_02), "コミットルール")
+        self.assertIn("例外（無人運転）", body)
+        self.assertIn("`/auto-refactor`", body)
+        self.assertIn("`/auto-audit`", body)
+
+    def _claude_md_exception_block(self) -> list[str]:
+        lines = read(CLAUDE_MD).splitlines()
+        start = next(i for i, l in enumerate(lines) if l.lstrip().startswith("- **例外**:"))
+        block = [lines[start]]
+        for line in lines[start + 1:]:
+            if line.startswith("    - "):
+                block.append(line)
+            else:
+                break
+        return block
+
+    def test_claude_md_does_not_list_setup_in_commit_exceptions(self):
+        block = self._claude_md_exception_block()
+        self.assertFalse([l for l in block if "/setup" in l], f"例外リストに /setup が残っている: {block}")
+        self.assertNotIn("プロジェクト立ち上げ", "\n".join(block))
         text = read(CLAUDE_MD)
-        lines = [line for line in text.splitlines() if "`/setup`" in line and SETUP_BRANCH in line]
-        self.assertTrue(lines, "CLAUDE.md の自律コミット例外に /setup が無い")
+        self.assertNotIn(SETUP_BRANCH, text)
 
-    def test_readme_mentions_both_behaviours(self):
+    def test_claude_md_keeps_unattended_loop_exceptions(self):
+        block = "\n".join(self._claude_md_exception_block())
+        self.assertIn("`/auto-refactor`", block)
+        self.assertIn("`/auto-audit`", block)
+
+    def test_readme_mentions_new_behaviours(self):
         line = next(line for line in read(README_MD).splitlines() if line.startswith("- `/setup"))
         self.assertIn(SETUP_BRANCH, line)
         self.assertRegex(line, r"構築まで行う|実際に構築")
+        self.assertIn("書き出", line)
+        self.assertRegex(line, r"人間が\s*`/commit`")
+        self.assertNotRegex(line, r"ブランチへコミット")
 
 
 if __name__ == "__main__":
