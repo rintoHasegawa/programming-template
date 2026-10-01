@@ -66,6 +66,16 @@ Remove-Item README.md
 - `/set-mode <solo\|team>` — 開発モードを切り替える（team 層ファイル・settings.json・CLAUDE.md・project-mode を一括整合）
 - `/task-create` / `/task-start` / `/task-handoff` — Issue ベースのタスク作成・着手・引継ぎ（solo / team 両モード共通）
 
+## リポジトリ外アクセスの制限
+
+同梱のフック（`.claude/hooks/restrict_repo_access.py`）が，Claude がリポジトリ外のファイルを取り返しのつかない形で壊さないようにする．
+
+- リポジトリ外の**削除**（`rm`・`Remove-Item`・`find -delete` 等．移動元を含む）と**既存ファイルの上書き**（`>` リダイレクト・`cp` の書き込み先・`sed -i`・`Set-Content`・Write・Edit 等）だけを拒否する（一時ディレクトリは許可）
+- 新規作成・ダウンロード・`mkdir`・追記（`>>` 等）は止めない．環境構築を自動で進められるようにするためで，それ以外の判断は権限モード（auto mode の分類器等）に任せる
+- 読み取り（Read・Glob・Grep・`cat` 等）はリポジトリ外も許可する．**読んだ内容は Claude の API に送信される**ため，読ませたくない場所は `.claude/repo-access.json` の `deny_read` に書いて禁止する（書式は GUIDE_01「環境構築」）
+- 拒否された操作が必要なときは，Claude が提示したコマンドの内容を確認し，プロンプトで `! <コマンド>` として自分で実行する．**`!` で実行したコマンドにはこのフックはかからない**
+- コマンド文字列の解析なので完全には防げない（変数展開・スクリプト経由等）．確実性が必要なら OS のフォルダ権限・`permissions.deny`・コマンドごとの承認・バックアップを併用する（GUIDE_01「環境構築」）
+
 ## ドキュメント
 
 `docs/01_GUIDE/` にプロジェクト運用のガイドが置かれている．`/setup` を実行すれば AI がこれらを順次参照しながら立ち上げを進める．

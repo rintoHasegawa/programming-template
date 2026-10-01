@@ -22,6 +22,9 @@
 # .claude/hooks/ の Python フックとそのテスト（tests/test_hooks.py）が生成するバイトコードキャッシュ
 __pycache__/
 
+# tests/test_hooks.py が一時的に作る作業ディレクトリ（テストが強制終了された場合の取り残し対策）
+.claude/hooks/tests/_restrict_sandbox_*/
+
 # -- プロジェクト立ち上げ時に有効化する（.claude/rules/git-conventions.md 参照） --
 # .env
 # .env.*
