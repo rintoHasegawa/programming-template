@@ -62,7 +62,7 @@
 - **前提条件**: 以下のツールは全プロジェクト共通で導入する．
   - `git` — バージョン管理（運用ルールは `.claude/rules/git-conventions.md` で定義）
   - `gh` — GitHub CLI（PR 作成・マージ等に使用）
-  - Python 3.7 以上と `bash` — `.claude/settings.json` のフック（リポジトリ外アクセス制限・通知）の実行に使用．フックは `bash .claude/hooks/run_python.sh` 経由で起動し，`python3` → `python` → `py` の順に実際に起動できるものを使う（いずれか 1 つで起動できればよい．Windows では Git for Windows 付属の `bash` を使う）．※ Python が見つからないとアクセス制限フックが Read・Write・Edit・Glob・Grep・Bash を**すべてブロックする**（通知フックは何もせず素通りする）
+  - Python 3.7 以上と `bash` — `.claude/settings.json` のフック（リポジトリ外アクセス制限・通知）の実行に使用．フックは `bash .claude/hooks/run_python.sh` 経由で起動し，`python3` → `python` → `py` の順に実際に起動できるものを使う（いずれか 1 つで起動できればよい．Windows では Git for Windows 付属の `bash` を使う）．※ Python が見つからないとアクセス制限フックが対象ツール（Read・Write・Edit・NotebookEdit・Glob・Grep・Bash・PowerShell）を**すべてブロックする**（通知フックは何もせず素通りする）
 - **基本方針**: 環境の再現性を重視し，手順書だけに頼らず構築を自動化・コード化できる方法を優先する（例: Docker，Dev Containers，Windows Sandbox，IaC ツール等）．
 - **人間が決めること**: 開発マシンの選定，クラウドサービスのアカウント作成，環境構築方法の選択
 - **実際の構築まで行う**: 手順書を書いて終わりにせず，`/setup` がその手順に従って実際に環境を構築し，実行して分かった誤り・前提の抜けを手順書に反映してから人間のレビューを受ける（未検証の手順書は誤りを含みやすく，最初に詰まるのがその場のユーザーになるため）．区分は次の 3 つ（詳細は `.claude/skills/setup/reference.md`「環境構築の実行」）
@@ -73,6 +73,30 @@
 - **GitHub リポジトリのセキュリティ設定**: GitHub の Settings → Code security にある **Dependabot alerts**（既知脆弱性の検出．"Vulnerabilities" として表示される）と **Dependabot security updates** はリポジトリごとに既定で OFF のため，リポジトリを作成したら必ず有効化する．モードに関わらず `/setup` が `gh api` で有効化・検証する（コマンド・検証・トラブル対応は `.claude/skills/setup/reference.md`「GitHub リポジトリのセキュリティ設定」）．`/setup` 時点でリポジトリが無い場合は，`ENV_03_管理者用環境構築手順.md` に転記した同じコマンドをリポジトリ作成後に実行する．
 - **依存バージョン更新（Dependabot version updates）**: 上記とは別に，依存パッケージを定期的に最新化する PR を作らせるため，`/setup` が技術スタックに合わせて `.github/dependabot.yml` を必ず生成する（週 1 回・マイナー／パッチをまとめる・`[update]` プレフィックス．エコシステム対応表と雛形は `.claude/skills/setup/reference.md`「依存バージョン更新の設定」）．Dependabot が作る PR と alert の処理は `/deps-update` で行う（ゲートを満たす PR を自動マージし，メジャー更新等は分析付きで報告．GUIDE_02「コミットルール」の例外）．
 - **Claude Code の権限設定（`.claude/settings.json`）**: テンプレート同梱の `permissions.allow`（`Bash(gh pr merge:*)`）は，auto mode で ops-runner に `/commit merge`・`/deps-update` のマージを実行させるために必要なので削除しない（変更はセッション再起動後に反映）．マージが分類器に止められた場合の切り分けと対処は `.claude/skills/commit/reference.md`「gh コマンドが実行される前にブロックされた場合」を参照．
+- **リポジトリ外アクセス制限フック（`.claude/hooks/restrict_repo_access.py`）**: 目的は「リポジトリ外のファイルの**削除**と**既存ファイルの上書き**（取り返しのつかない操作）だけを確実に止める」こと．テンプレート同梱の `.claude/settings.json` が `PreToolUse` で呼ぶ．
+  - 位置づけ: 新規ファイルの作成・ダウンロード・ディレクトリ作成・追記は止めない（環境構築でのダウンロード・`mkdir`・`~/.bashrc` への追記等を自動で進められるようにするため）．それ以外のグレーな操作の判断は権限モード（auto mode の分類器・コマンドごとの承認等）に任せ，フックは最後の砦として削除・上書きだけを止める
+  - 削除（常に拒否）: Bash の `rm`・`rmdir`・`unlink`・`shred`・`truncate`・`find -delete`／`-exec rm`・`mv` の移動元・`rsync --delete` の書き込み先，PowerShell の `Remove-Item` とそのエイリアス・`Clear-Content`・`Move-Item`／`Rename-Item` の移動元・`[IO.File]::Delete` 等，`cmd /c del` 等．`python -c`・`node -e`・ヒアドキュメント等のインライン実行は，削除系の呼び出し（`rmtree`・`os.remove`・`unlink`・`fs.rm` 等）があり，かつコード中にリポジトリ外のパスがある場合に拒否する．Edit・NotebookEdit（既存ファイルの書き換え）も拒否する
+  - 上書き（書き込み先が既に存在する場合だけ拒否．無ければ新規作成として許可）: `>`・`>|`・`&>`，`cp`・`mv`・`install`・`rsync`・`scp`・`ln -f`・`Copy-Item`・`Move-Item` の書き込み先（既存ディレクトリへのコピー・移動は `<ディレクトリ>/<コピー元の名前>` で判定），`sed -i`・`perl -i`，`tee`（`-a` 無し）・`Set-Content`・`Out-File`／`Tee-Object`／`Export-Csv`（`-Append` 無し）・`New-Item -Force`，`dd of=`，`curl -o`・`wget -O`・`Invoke-WebRequest -OutFile` 等の保存先，`Expand-Archive -Force`・`Compress-Archive -Force`，Write ツール，インライン実行の `open(..., 'w')`・`writeFile` 等
+  - 許可: 新規作成・ダウンロード・`mkdir`／`New-Item -ItemType Directory`・`touch`・追記（`>>`・`tee -a`・`Add-Content`・`Out-File -Append`）．`chmod`・`chown`・`Set-Acl` も中身が失われないため許可する
+  - `cd`・`pushd`・`Set-Location` を追跡し，`~` と `$HOME` を展開してから判定する．基準はリポジトリのルート（`CLAUDE_PROJECT_DIR`）で，システム一時ディレクトリ（`/tmp`・`%TEMP%`．スクラッチパッドを含む）と `/dev/null`・`$null` 等は削除・上書きも許可する
+  - 読み取り: Read・Glob・Grep，Bash・PowerShell の読み取りはリポジトリ外も許可する．**読んだファイルの内容は Claude の API に送信される**ため，リポジトリ外を読ませることの是非はプロジェクトごとに判断する．読ませたくない場所（`~/.ssh`・`~/.aws`・他案件のフォルダ等）は禁止リスト `.claude/repo-access.json` に書く（任意．無ければ禁止リストは空）．禁止リストに該当するパスは読み取り・書き込みとも拒否する．Glob・Grep・再帰的に読むコマンド（`grep -r`・`find`・`Get-ChildItem` 等）は，リポジトリ外の検索起点の配下に禁止パスがある場合も拒否する
+
+    ```json
+    {
+      "deny_read": ["~/.ssh", "~/.aws", "C:/Users/me/source/other-project", "secrets"]
+    }
+    ```
+
+    - パスは絶対パス・`~` 始まり・リポジトリルート相対で書く．ファイルが壊れている（JSON として読めない等）場合は禁止リストを空として扱い，警告を出す
+    - プロジェクト所有のファイルであり，テンプレートには含まれないため `/sync-template` で上書きされない．人によって守りたい場所が違う場合は各自の場所も含めて書くか，各自が後述の `permissions.deny` を `.claude/settings.local.json` に書く
+  - **限界**: コマンド文字列の静的解析のため原理的に完全には防げない．変数展開（`$DIR` 等．`~`・`$HOME`・`$env:USERPROFILE`・一時ディレクトリ系以外は解決しない），スクリプトファイル経由の操作，`xargs` 等パイプで渡したパス，エイリアス・関数，エンコードされたコマンド，未対応コマンドによる削除・上書き，インライン実行中の未対応の書き方（変数に入れたパス・Perl の `open` 等）は検出できない．既存かどうかはフック実行時点で判定するため，同じコマンド内で先に作ったファイルを上書きする場合等は許可される．逆に，インライン実行で削除系の呼び出しとリポジトリ外のパス（文字列やコメント中のものも含む）が同時に現れると，削除対象でなくても拒否されることがある．また Glob・Grep を省略した検索起点（リポジトリ内）では，リポジトリ内の禁止パスを含む検索までは止めない
+  - **拒否されたときの運用**: リポジトリ外の削除・上書きの最終判断は人間が持つ．フックに拒否されても，Claude は別の書き方（変数経由・スクリプトファイル経由・`python -c` 等）で迂回しない．必要な操作であれば，Claude は実行するコマンドをそのまま提示して依頼するので，ユーザーが内容を確認し，プロンプトで `! <コマンド>` として自分で実行する．フックが検出できない書き方であっても，リポジトリ外のファイルの削除・上書き（既存ファイルの移動を含む）は同じ扱いとする（`CLAUDE.md`「手動確認が必要な作業」）．禁止リストによる読み取りの拒否は「読ませたくない場所」の指定なので，Claude は迂回して読まず，`!` での実行依頼もしない
+  - **`!` で実行したコマンドにはこのフックはかからない**（実機で確認済み）．Claude が提示したコマンドは，削除・上書きの対象が意図どおりかを確認してから実行する
+  - 確実性が必要な場合は以下を併用する
+    - OS のフォルダ権限（Claude Code を実行するユーザーに守りたいフォルダの書き込み権限を与えない．dev container ならリポジトリだけをマウントする）
+    - `settings.json` の `permissions.deny`（例: `"Read(~/.ssh/**)"`・`"Edit(~/.ssh/**)"`．Claude Code 本体が Read・Edit 系ツールを確実に止める）
+    - Bash・PowerShell の実行前に確認を挟む権限モード（auto mode や `--dangerously-skip-permissions` を使わず，コマンドごとに承認する）
+    - バックアップ（Git 管理外の大事なデータは定期的に退避する）
 - **スマホへのプッシュ通知（任意）**: テンプレート同梱の `.claude/settings.json` は，作業完了（`Stop`）・許可待ち（`Notification`）・質問（`PreToolUse` の `AskUserQuestion`）で `.claude/hooks/notify.py` を呼び，[ntfy](https://ntfy.sh) 経由でスマホに通知する（ホスト OS・dev container のどちらでも動く）．送信先トピックが未設定なら何もしないため，受け取りたい人だけ以下を行う．
   - スマホに ntfy アプリを入れ，推測されにくいトピック名（例: `claude-` ＋ランダムな英数字）を購読する．トピック名を知っていれば誰でも購読・送信できるため，パスワードと同様に扱いリポジトリには書かない
   - iPhone でアプリを開くと届いているのにプッシュ通知が出ない場合は，トピックを削除してアプリを再起動し，購読し直す（ntfy の既知の問題．購読し直すと通知の登録がやり直される）
