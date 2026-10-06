@@ -281,6 +281,19 @@ def convert_posix_drive(path: str) -> str:
     return path
 
 
+def is_absolute(path: str) -> bool:
+    """path を絶対パスとして扱うか（cwd と結合しないか）を判定する.
+
+    Python 3.13 以降の ntpath.isabs はドライブ無しの root-relative パス（`/tmp/x`・`\\tmp\\x`）を
+    False と判定するようになり，cwd と結合されて `D:\\tmp\\x` 等に化ける（/tmp の判定を外れる）．
+    Windows では Python のバージョンによらず `/`・`\\` 始まりを絶対パスとして扱い，3.12 以前の挙動に揃える．
+    POSIX ホストでは os.path.isabs（posixpath）の判定をそのまま使う．
+    """
+    if os.name == "nt" and path[:1] in ("/", "\\"):
+        return True
+    return os.path.isabs(path)
+
+
 def expand_variables(token: str, dialect: str) -> str | None:
     """`~`・$HOME 等の既知の変数を展開する．未知の変数が残れば None を返す."""
     token = expand_home(token)
@@ -333,7 +346,7 @@ def resolve_path(token: str, cwd: str | None, dialect: str = "bash") -> str | No
         # 区切りと見なさず `..\..` を畳めない（リポジトリ内と誤判定する）ため，判定前に `/` へ揃える
         token = token.replace("\\", "/")
     token = convert_posix_drive(token)
-    if not os.path.isabs(token):
+    if not is_absolute(token):
         if cwd is None:
             return UNKNOWN
         token = os.path.join(cwd, token)
@@ -409,7 +422,7 @@ def load_deny_read(repo_root: str) -> list:
         if not entry:
             continue
         entry = convert_posix_drive(expand_home(entry))
-        if not os.path.isabs(entry):
+        if not is_absolute(entry):
             entry = os.path.join(repo_root, entry)
         result.append(os.path.normpath(entry))
     return result

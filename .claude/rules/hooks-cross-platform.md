@@ -18,6 +18,7 @@ paths: [".claude/hooks/**", ".github/workflows/hooks-ci.yml"]
 - `os.path` はホスト OS によって `ntpath`（Windows）と `posixpath`（macOS / Linux）に切り替わる．区切り文字（`\` を区切りと見なすか），絶対パスの判定（`isabs`），ドライブレター，大文字小文字の区別が OS ごとに異なることを前提に書く
 - 解析対象のシェルの区切りの扱いがホストの `os.path` と異なる場合は，判定の前に明示的に正規化する（例: Linux / macOS の `pwsh` は `\` も区切りとして受け付けるため，POSIX ホストでは PowerShell のパスの `\` を `/` に揃えてから `isabs`・`join`・`normpath` に渡す）
 - 「`/` で始まるか」のような，ある OS でだけ成り立つ前提で分岐しない（例: cmd.exe のスイッチ `/s` と POSIX の絶対パス `/workspace/x` を区別できる判定にする）
+- 絶対パスの判定を `ntpath.isabs` の結果に直接依存させない．Python 3.13 で `ntpath.isabs` が変わり，ドライブ無しの root-relative パス（`/tmp/x`・`\tmp\x`）を False と判定するようになったため，そのまま使うと cwd と結合されて `D:\tmp\x` 等に化け，Python のバージョンで判定が変わる（フックでは `is_absolute` で Windows の `/`・`\` 始まりを常に絶対パスとして扱う）
 - Git Bash 形式のパス（`/c/Users/...`）・ドライブレター・UNC パス等の Windows 固有の変換は `os.name == "nt"` のときだけ行い，他 OS の挙動を変えない
 - シェルスクリプト（`*.sh`）は macOS 標準の bash 3.2 と BSD 版コマンドでも動く書き方にする（GNU 拡張のオプションや bash 4 以降の構文に頼らない）
 

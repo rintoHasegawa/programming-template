@@ -14,6 +14,7 @@ import contextlib
 import http.server
 import io
 import json
+import ntpath
 import os
 import posixpath
 import re
@@ -1522,6 +1523,171 @@ class TestRestrictPosixHostSimulation(unittest.TestCase):
                 with self.subTest(cmd):
                     reason = self.rra.check_powershell_command(cmd, "/work/repo/sub", repo_root="/work/repo", deny_read=[])
                     self.assertIsNone(reason, f"許可されるべき: {cmd} / 理由: {reason}")
+
+
+def _isabs_py313(path) -> bool:
+    """Python 3.13 以降の ntpath.isabs 相当（UNC・デバイスパスか，ドライブとルートを持つときだけ True）.
+
+    3.12 以前は `/tmp/x`・`\\tmp\\x` のようなドライブ無しの root-relative パスも True だった．
+    """
+    s = os.fspath(path)
+    if isinstance(s, bytes):
+        s = s.decode("utf-8", "surrogateescape")
+    s = s[:3].replace("/", "\\")
+    return (s.startswith("\\") and s.startswith("\\", 1)) or s.startswith(":\\", 1)
+
+
+@contextlib.contextmanager
+def _simulate_py313_ntpath_isabs():
+    """ntpath.isabs を Python 3.13 相当に差し替える（with を抜けると例外時も mock.patch が元に戻す）.
+
+    Windows ではフックの os.path は ntpath そのものなので，フックの os.path.isabs にも効く．
+    実行中の Python が 3.13 以降なら実質的に同じ挙動のまま（差し替えても結果は変わらない）．
+    """
+    with mock.patch.object(ntpath, "isabs", _isabs_py313):
+        yield
+
+
+class TestIsAbsoluteAllHosts(unittest.TestCase):
+    """is_absolute: ホスト OS に依存しない判定と，POSIX ホストの挙動が変わらないこと（全 OS で実行）."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.rra = _load_restrict()
+
+    def test_relative_and_native_absolute(self):
+        for path in ("x", "a/b", "../x", ".", ""):
+            with self.subTest(path=path):
+                self.assertFalse(self.rra.is_absolute(path), path)
+        native_abs = os.path.abspath("x")
+        self.assertTrue(self.rra.is_absolute(native_abs), native_abs)
+
+    def test_posix_host_slash_absolute_backslash_relative(self):
+        """POSIX ホストでは `/tmp/x` は絶対，`\\tmp\\x` は相対のまま（ファイル名の一部）."""
+        with _simulate_posix_host(self.rra):
+            self.assertTrue(self.rra.is_absolute("/tmp/x"))
+            self.assertTrue(self.rra.is_absolute("/"))
+            self.assertFalse(self.rra.is_absolute("\\tmp\\x"))
+            self.assertFalse(self.rra.is_absolute("\\"))
+            self.assertFalse(self.rra.is_absolute("C:\\x"))
+
+    def test_posix_host_resolve_backslash_root_stays_relative(self):
+        with _simulate_posix_host(self.rra):
+            self.assertEqual(self.rra.resolve_path("\\tmp\\x", "/work/repo", "bash"), "/work/repo/\\tmp\\x")
+            self.assertEqual(self.rra.resolve_path("/tmp/some-dir", "/work/repo", "bash"), "/tmp/some-dir")
+            self.assertTrue(self.rra.is_temp_path(self.rra.resolve_path("/tmp/some-dir", "/work/repo", "bash")))
+            self.assertIsNone(self.rra.check_bash_command("rm -rf /tmp/some-dir", "/work/repo",
+                                                          repo_root="/work/repo", deny_read=[]))
+
+    def test_posix_host_unaffected_by_ntpath_patch(self):
+        """ntpath の差し替えは POSIX ホスト相当（posixpath）の判定に影響しない."""
+        with _simulate_posix_host(self.rra), _simulate_py313_ntpath_isabs():
+            self.assertTrue(self.rra.is_absolute("/tmp/x"))
+            self.assertFalse(self.rra.is_absolute("\\tmp\\x"))
+            self.assertEqual(self.rra.resolve_path("/tmp/some-dir", "/work/repo", "bash"), "/tmp/some-dir")
+
+
+class TestPy313SimulationRestored(unittest.TestCase):
+    def test_patch_effective_and_restored(self):
+        original = ntpath.isabs
+        with _simulate_py313_ntpath_isabs():
+            self.assertFalse(ntpath.isabs("/tmp/x"))
+            self.assertFalse(ntpath.isabs("\\tmp\\x"))
+            self.assertTrue(ntpath.isabs("C:\\x"))
+            self.assertTrue(ntpath.isabs("C:/x"))
+            self.assertTrue(ntpath.isabs("\\\\server\\share\\x"))
+            self.assertFalse(ntpath.isabs("C:x"))
+        self.assertIs(ntpath.isabs, original)
+        with self.assertRaises(RuntimeError):
+            with _simulate_py313_ntpath_isabs():
+                raise RuntimeError("x")
+        self.assertIs(ntpath.isabs, original, "例外時も復元されること")
+
+
+class _WindowsRootRelativeCases:
+    """Windows でドライブ無しの root-relative パスを絶対パスとして扱うこと（Python のバージョンによらず）.
+
+    サブクラスの simulate() が ntpath.isabs の挙動（実行中の Python のまま / 3.13 相当）を切り替える．
+    """
+
+    def simulate(self):
+        raise NotImplementedError
+
+    def test_is_absolute_root_relative(self):
+        with self.simulate():
+            for path in ("/tmp/x", "\\tmp\\x", "/", "\\", "C:\\x", "C:/x", "\\\\server\\share\\x"):
+                with self.subTest(path=path):
+                    self.assertTrue(self.rra.is_absolute(path), path)
+            for path in ("x", "..\\x", "C:x", ""):
+                with self.subTest(path=path):
+                    self.assertFalse(self.rra.is_absolute(path), path)
+
+    def test_resolve_root_relative_not_joined_with_cwd(self):
+        with self.simulate():
+            for token, dialect in (("/tmp/some-dir", "bash"), ("/tmp/some-dir", "powershell"),
+                                   ("\\tmp\\some-dir", "powershell"), ("\\tmp\\some-dir", "bash")):
+                with self.subTest(token=token, dialect=dialect):
+                    resolved = self.rra.resolve_path(token, self.repo, dialect)
+                    self.assertEqual(resolved, "\\tmp\\some-dir")
+                    self.assertTrue(self.rra.is_temp_path(resolved), resolved)
+            # cwd が無くても（cwd 不明でも）絶対パスとして解決できる
+            self.assertEqual(self.rra.resolve_path("/tmp/some-dir", None, "bash"), "\\tmp\\some-dir")
+
+    def test_relative_still_joined_with_cwd(self):
+        with self.simulate():
+            self.assertEqual(os.path.normcase(self.rra.resolve_path("../file.txt", self.sub, "bash")),
+                             os.path.normcase(os.path.join(self.repo, "file.txt")))
+            self.assertEqual(os.path.normcase(self.rra.resolve_path("..\\file.txt", self.sub, "powershell")),
+                             os.path.normcase(os.path.join(self.repo, "file.txt")))
+
+    def test_rm_rf_tmp_allowed(self):
+        with self.simulate():
+            for cmd in ("rm -rf /tmp/some-dir", "rm -rf /tmp/some-dir/sub", "echo x > /tmp/some-file"):
+                with self.subTest(cmd):
+                    self.assertAllowed(self.bash(cmd), cmd)
+            for cmd in ("Remove-Item /tmp/some-dir -Recurse -Force", "Remove-Item \\tmp\\some-dir -Recurse"):
+                with self.subTest(cmd):
+                    self.assertAllowed(self.ps(cmd), cmd)
+
+    def test_tmp_escape_still_denied(self):
+        """/tmp/.. による脱出は温存しない（絶対パス扱いにしても一時ディレクトリ判定を緩めない）."""
+        with self.simulate():
+            self.assertDenied(self.bash("rm -rf /tmp/../some-dir"))
+            self.assertDenied(self.bash(f'rm -rf "{_fwd(os.path.join(self.out, "other"))}"'))
+
+    def test_deny_read_root_relative_entry_not_joined_with_repo_root(self):
+        cfg = os.path.join(self.repo, ".claude", "repo-access.json")
+        with open(cfg, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"deny_read": ["/foo", "\\bar\\baz", "secrets"]}))
+        with self.simulate():
+            entries = self.rra.load_deny_read(self.repo)
+        normed = [os.path.normcase(e) for e in entries]
+        self.assertIn(os.path.normcase("\\foo"), normed)
+        self.assertIn(os.path.normcase("\\bar\\baz"), normed)
+        self.assertIn(os.path.normcase(os.path.join(self.repo, "secrets")), normed)
+        self.assertEqual(len(entries), 3)
+
+
+@unittest.skipUnless(os.name == "nt", "ntpath の root-relative パス（ドライブ無しの /tmp・\\tmp）は Windows ホストのみの概念")
+class TestWindowsRootRelativeCurrentPython(_WindowsRootRelativeCases, RestrictSandboxMixin, unittest.TestCase):
+    """実行中の Python の ntpath.isabs のまま検証する."""
+
+    def simulate(self):
+        return contextlib.nullcontext()
+
+
+@unittest.skipUnless(os.name == "nt", "ntpath.isabs の 3.13 での変更は Windows（ntpath）でのみフックに影響する")
+class TestWindowsRootRelativePy313(_WindowsRootRelativeCases, RestrictSandboxMixin, unittest.TestCase):
+    """ntpath.isabs を Python 3.13 相当に差し替えて検証する（3.12 以前のホストでも 3.13+ の挙動を再現する）."""
+
+    def simulate(self):
+        return _simulate_py313_ntpath_isabs()
+
+    def test_temp_dir_allowed_existing_case(self):
+        """CI（windows-latest / Python 3.14）で失敗した test_temp_dir_allowed の /tmp ケースの再現."""
+        with self.simulate():
+            self.assertFalse(os.path.isabs("/tmp/some-dir"), "差し替えが効いていること")
+            self.assertAllowed(self.bash("rm -rf /tmp/some-dir"))
 
 
 class TestCmdSwitchDetection(unittest.TestCase):
