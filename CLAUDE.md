@@ -66,7 +66,7 @@
 
 - プロジェクト立ち上げフロー: docs/01_GUIDE/GUIDE_01_プロジェクト立ち上げフロー.md
 - エージェント運用ルール: docs/01_GUIDE/GUIDE_02_エージェント運用ルール.md
-- ※ Git 規約・ドキュメント書式・命名規則・進捗記録・テンプレート改変記録は `.claude/rules/`（git-conventions / markdown-style / docs-naming / progress-log / template-customization）に定義されている（git-conventions は常時，他は該当ファイル編集時に自動ロード）
+- ※ Git 規約・ドキュメント書式・命名規則・進捗記録・テンプレート改変記録・フックのクロスプラットフォーム対応は `.claude/rules/`（git-conventions / markdown-style / docs-naming / progress-log / template-customization / hooks-cross-platform）に定義されている（git-conventions は常時，他は該当ファイル編集時に自動ロード）
 - ※ コーディング規約，テスト方針等はプロジェクト立ち上げ時に path-scoped rules（`.claude/rules/`）として作成する（GUIDE_01 参照）
 
 ### 02_ENV（環境）

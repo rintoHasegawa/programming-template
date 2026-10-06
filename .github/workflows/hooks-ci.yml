@@ -1,0 +1,42 @@
+# .claude/hooks/ のテストを Windows / macOS / Linux の 3 OS で実行する（Issue #51）.
+# フックは開発者ごとに異なる OS で動くため，1 つの OS だけで通った修正を取り込まない
+# （運用ルール: .claude/rules/hooks-cross-platform.md）.
+name: hooks-ci
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".claude/hooks/**"
+      - ".claude/settings.json"
+      - ".github/workflows/hooks-ci.yml"
+  pull_request:
+    paths:
+      - ".claude/hooks/**"
+      - ".claude/settings.json"
+      - ".github/workflows/hooks-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hooks:
+    name: hooks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run hook tests
+        run: python -B -m unittest discover -s .claude/hooks/tests -v
