@@ -176,6 +176,13 @@ class TestLayerPremises(unittest.TestCase):
                 "test_hooks.py が team 層扱いになっている: " + entry,
             )
 
+    def test_hooks_ci_is_not_synced(self):
+        """フックの 3 OS CI（hooks-ci.yml）はテンプレート専用で，同期対象外として仕様の 2 箇所に載っている."""
+        skip_files = re.search(r"SKIP_FILES=\((.*?)\)", read(SYNC_REFERENCE), flags=re.DOTALL)
+        self.assertIsNotNone(skip_files, "reference.md に SKIP_FILES の定義が見つからない")
+        self.assertIn(".github/workflows/hooks-ci.yml", re.findall(r'"([^"]+)"', skip_files.group(1)))
+        self.assertRegex(read(SYNC_SKILL), r"\|\s*`\.github/workflows/hooks-ci\.yml`\s*\|")
+
 
 # ---------------------------------------------------------------------------
 # 本体: solo（team 層無し）では skip，team（有り）では実行される
