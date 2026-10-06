@@ -10,6 +10,7 @@ paths: [".claude/hooks/**", ".github/workflows/hooks-ci.yml"]
 
 - **Windows / macOS / Linux の全てでフックが動作し，`.claude/hooks/tests` が全件通ること**を完成条件とする．手元の OS だけで通った状態は未完成として扱う
 - 3 OS での実行は GitHub Actions のワークフロー `.github/workflows/hooks-ci.yml`（`windows-latest` / `macos-latest` / `ubuntu-latest` のマトリクス）が行う．PR の CI が 3 OS とも緑であることを確認してからマージする
+- このワークフローはテンプレートリポジトリにだけ置き，`/sync-template` で派生プロジェクトには配布しない．派生プロジェクトでフックの不具合を見つけた場合は，テンプレートリポジトリ側で修正して CI で 3 OS を確認し，`/sync-template` で取り込む
 - 手元での確認はホスト OS で `python -B -m unittest discover -s .claude/hooks/tests`（`python` が無い環境では `python3`）を実行する．Windows ホストで WSL が使える場合は，リポジトリを WSL 側の一時ディレクトリ以外の場所に複製して `python3 -B -m unittest discover -s .claude/hooks/tests` を実行すると Linux の挙動も事前に確認できる
 - Python 3.7 以上で動く書き方を守る（`run_python.sh` が拾う Python は環境により古い場合がある．`TestPython37Compat` が検査する）
 

@@ -15,7 +15,7 @@
 
 ```bash
 MERGE_FILES=(".gitignore" "CLAUDE.md" "docs/PROGRESS.md" ".gitattributes" ".claude/settings.json" ".claude/template-overrides.md")
-SKIP_FILES=("README.md" ".claude/tests/")   # 末尾 / はディレクトリ配下すべてを対象にする
+SKIP_FILES=("README.md" ".claude/tests/" ".github/workflows/hooks-ci.yml")   # 末尾 / はディレクトリ配下すべてを対象にする
 TEAM_LAYER_FILES=(
   "docs/01_GUIDE/GUIDE_03_チーム開発ルール.md"
   ".claude/hooks/check_sync.sh"
