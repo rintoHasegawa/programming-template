@@ -9,7 +9,7 @@ paths: [".claude/agents/**", ".claude/skills/**", ".claude/rules/**", ".claude/h
 ## 適用条件 (Scope)
 
 - テンプレートから派生したプロジェクト（`.claude/template-sync-sha` が存在する）でのみ適用する．テンプレートリポジトリ自身の編集では不要
-- **対象（テンプレートが管理するファイル）**: `.claude/agents/`，`.claude/skills/`（テンプレート提供の skill），`.claude/rules/`（`git-conventions`・`markdown-style`・`docs-naming`・`progress-log`・本ルール等，テンプレート由来のもの），`.claude/hooks/`，`docs/01_GUIDE/`（`GUIDE_01`〜`GUIDE_03`）
+- **対象（テンプレートが管理するファイル）**: `.claude/agents/`，`.claude/skills/`（テンプレート提供の skill），`.claude/rules/`（`git-conventions`・`markdown-style`・`docs-naming`・`progress-log`・`hooks-cross-platform`・本ルール等，テンプレート由来のもの），`.claude/hooks/`，`docs/01_GUIDE/`（`GUIDE_01`〜`GUIDE_03`）
 - **対象外**:
   - プロジェクトが新規に作ったファイル（立ち上げ時に作成するコーディング規約 rule，プロジェクト独自の skill / agent 等）．テンプレートに存在しないので同期で上書きされない
   - `.claude/verify-profile.md`（検証プロファイル）．テンプレートが持つのは雛形（`.claude/skills/verify/profile-template.md`）だけであり，プロファイル本体はプロジェクト所有のため同期で触られない．台帳登録は不要

@@ -14,13 +14,16 @@ import contextlib
 import http.server
 import io
 import json
+import ntpath
 import os
+import posixpath
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
+import types
 import unittest
 from unittest import mock
 
@@ -1169,11 +1172,61 @@ class TestRestrictDelete(RestrictSandboxMixin, unittest.TestCase):
             f"del {ex}", f"rd {d} -Recurse", f"ri {ex}", f"rm {ex}", f"erase {ex}", f"rmdir {d}",
             f"Clear-Content {ex}", f"Move-Item {ex} .\\moved.txt", f"Move-Item -Path {ex} -Destination .\\m.txt",
             f"Rename-Item {ex} renamed.txt", f"[IO.File]::Delete('{ex}')", f"[System.IO.File]::Delete(\"{ex}\")",
-            f"cmd /c del {ex}", f"cmd /c rd /s /q {d}",
         ]
         for cmd in cases:
             with self.subTest(cmd):
                 self.assertDenied(self.ps(cmd), cmd)
+
+    def test_cmd_exe_delete_commands_with_host_absolute_path(self):
+        """cmd /c の引数のホスト OS の絶対パスをスイッチと取り違えないこと（Issue #51 原因 1）.
+
+        スイッチ（/s・/q）と絶対パス（POSIX の /workspace/x・Windows の C:\\x）の区別は
+        OS に依存しない判定なので全 OS で実行する．
+        """
+        ex = self.existing
+        d = os.path.join(self.out, "other")
+        cases = [
+            f"cmd /c del {ex}", f"cmd /c rd /s /q {d}", f"cmd /c del /f /q {ex}", f"cmd /c rmdir /s {d}",
+            f"cmd /c del {_fwd(ex)}", f"cmd /c rd /s /q {_fwd(d)}", f'cmd /c rd /s /q "{d}"',
+            f"cmd /c erase {ex}", f"cmd /c ren {ex} renamed.txt", f"cmd /c move {ex} moved.txt",
+            f"cmd /c robocopy src {d} /mir", f"cmd /c robocopy src {d} /purge",
+            f"cmd /c echo x > {ex}",
+        ]
+        for cmd in cases:
+            with self.subTest(cmd):
+                self.assertDenied(self.ps(cmd), cmd)
+
+    def test_cmd_exe_relative_backslash_path_escaping_repo(self):
+        """cmd /c の相対パス（`\\` 区切り）の `..` による脱出を全 OS で検出すること."""
+        rel = os.path.join("..", "..", "outside")
+        self.assertDenied(self.ps("cmd /c del ..\\..\\outside\\existing.txt", cwd=self.sub))
+        self.assertDenied(self.ps("cmd /c rd /s /q ..\\..\\outside\\other", cwd=self.sub))
+        self.assertDenied(self.ps(f"cmd /c del {_fwd(rel)}/existing.txt", cwd=self.sub))
+        self.assertAllowed(self.ps("cmd /c del ..\\file.txt", cwd=self.sub))
+        self.assertAllowed(self.ps("cmd /c rd /s /q build"))
+
+    def test_cmd_exe_switches_only_or_inside_repo_allowed(self):
+        """スイッチだけ・リポジトリ内の対象は許可（スイッチをパスとして誤検出しない）."""
+        for cmd in ("cmd /c dir /s /b", "cmd /c del /q file.txt", "cmd /c rd /s /q sub",
+                    "cmd /c xcopy file.txt sub /y /-y", "cmd /c robocopy sub build /mir /log:out.txt",
+                    "cmd /c dir /a:h", "cmd /c del /?"):
+            with self.subTest(cmd):
+                self.assertAllowed(self.ps(cmd), cmd)
+
+    @unittest.skipUnless(os.name == "nt", "ドライブレター・Git Bash 形式（/c/...）のパスは Windows にしか存在しないため")
+    def test_cmd_exe_windows_path_forms(self):
+        ex = self.existing
+        d = os.path.join(self.out, "other")
+        cases = [
+            f"cmd /c del {_gitbash(ex)}", f"cmd /c rd /s /q {_gitbash(d)}",
+            f"cmd /c del {ex.replace(os.sep, '/')}", f"cmd /c robocopy src {d} /mir /log:{os.path.join(self.repo, 'l.txt')}",
+            f"cmd /c del {ex[0].lower()}{ex[1:]}",
+        ]
+        for cmd in cases:
+            with self.subTest(cmd):
+                self.assertDenied(self.ps(cmd), cmd)
+        # /log:C:\x はスイッチなのでリポジトリ外を指していても削除対象にならない
+        self.assertAllowed(self.ps(f"cmd /c robocopy sub build /log:{ex}"))
 
     def test_inline_delete_calls(self):
         d = _fwd(os.path.join(self.out, "other"))
@@ -1337,6 +1390,326 @@ class TestRestrictLocationTracking(RestrictSandboxMixin, unittest.TestCase):
         self.assertAllowed(self.bash(f'echo x > "{out}/brand_new.txt"'))
         self.assertAllowed(self.bash(f'rm -rf "{_gitbash(self.repo)}/build"'))
         self.assertDenied(self.bash(f'rm -rf "/cygdrive{out}/other"'))
+
+
+class TestRestrictPowerShellBackslash(RestrictSandboxMixin, unittest.TestCase):
+    """PowerShell の `\\` 区切りの相対パスをホスト OS に関係なく解決すること（Issue #51 原因 2）.
+
+    pwsh は Linux / macOS でも `\\` を区切りとして受け付けるため，`..\\..` による脱出の検出は
+    OS 非依存であるべき判定として全 OS で実行する．
+    """
+
+    def test_remove_item_escaping_repo_denied(self):
+        cases = [
+            "Remove-Item ..\\..\\outside\\existing.txt",
+            "Remove-Item ..\\..\\outside\\other -Recurse -Force",
+            "Remove-Item -Path ..\\..\\outside\\other -Recurse",
+            "Remove-Item -LiteralPath ..\\..\\outside\\existing.txt",
+            "Remove-Item ..\\../outside/existing.txt",
+            "Remove-Item .\\..\\..\\outside\\existing.txt",
+            "Clear-Content ..\\..\\outside\\existing.txt",
+            "Move-Item ..\\..\\outside\\existing.txt .\\moved.txt",
+            "Remove-Item ..\\..\\outside\\__no_such_file__.txt",
+        ]
+        for cmd in cases:
+            with self.subTest(cmd):
+                self.assertDenied(self.ps(cmd, cwd=self.sub), cmd)
+
+    def test_overwrite_escaping_repo_by_existence(self):
+        self.assertDenied(self.ps("Set-Content ..\\..\\outside\\existing.txt 'x'", cwd=self.sub))
+        self.assertDenied(self.ps("'x' > ..\\..\\outside\\existing.txt", cwd=self.sub))
+        self.assertDenied(self.ps("Copy-Item ..\\file.txt ..\\..\\outside\\existing.txt", cwd=self.sub))
+        self.assertAllowed(self.ps("Set-Content ..\\..\\outside\\brand_new.txt 'x'", cwd=self.sub))
+        self.assertAllowed(self.ps("Add-Content ..\\..\\outside\\existing.txt 'x'", cwd=self.sub))
+
+    def test_inside_repo_backslash_relative_allowed(self):
+        for cmd in ("Remove-Item ..\\file.txt", "Remove-Item ..\\sub\\x -Recurse", "Remove-Item .\\build -Recurse",
+                    "Set-Content ..\\file.txt 'x'", "Remove-Item ..\\..\\repo\\file.txt"):
+            with self.subTest(cmd):
+                self.assertAllowed(self.ps(cmd, cwd=self.sub), cmd)
+
+    def test_location_change_with_backslash_relative(self):
+        self.assertDenied(self.ps("Set-Location ..\\..\\outside; Remove-Item existing.txt", cwd=self.sub))
+        self.assertDenied(self.ps("cd ..\\..\\outside\\other; Remove-Item data -Recurse", cwd=self.sub))
+        self.assertAllowed(self.ps("Set-Location ..\\..\\outside; Get-Content existing.txt", cwd=self.sub))
+
+    def test_main_powershell_backslash_relative(self):
+        """main 経由（フック入力の cwd 起点）でも拒否されること."""
+        env = dict(os.environ, CLAUDE_PROJECT_DIR=self.repo)
+        deny = self.run_main({"tool_name": "PowerShell", "cwd": self.sub,
+                              "tool_input": {"command": "Remove-Item ..\\..\\outside\\other -Recurse"}}, env)
+        self.assertEqual(deny.returncode, 0, deny.stderr)
+        self.assertEqual(self.decision(deny), "deny")
+        allow = self.run_main({"tool_name": "PowerShell", "cwd": self.sub,
+                               "tool_input": {"command": "Remove-Item ..\\file.txt"}}, env)
+        self.assertIsNone(self.decision(allow))
+
+
+@contextlib.contextmanager
+def _simulate_posix_host(module):
+    """module から見える os を POSIX ホスト相当（os.name == "posix"・os.path == posixpath）にする.
+
+    差し替えるのは module の名前空間の `os` だけで，本物の os モジュール・他のテストには影響しない．
+    with を抜けると（例外時も）mock.patch.object が元に戻す．
+    """
+    fake = types.SimpleNamespace(**{k: getattr(os, k) for k in dir(os) if not k.startswith("__")})
+    fake.name = "posix"
+    fake.path = posixpath
+    fake.sep = "/"
+    fake.altsep = None
+    with mock.patch.object(module, "os", fake):
+        yield
+
+
+class TestRestrictPosixHostSimulation(unittest.TestCase):
+    """ホスト OS に関係なく，POSIX ホストでの解決結果を確かめる（Windows 上でも POSIX の挙動を検証する）.
+
+    実 OS 上のサンドボックスを使うテスト（TestRestrictPowerShellBackslash 等）を補完する．
+    パスは POSIX 形式の文字列で与える（このクラスでは os.path を posixpath に差し替えているため）．
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.rra = _load_restrict()
+
+    def test_simulation_is_restored(self):
+        real_os = self.rra.os
+        with _simulate_posix_host(self.rra):
+            self.assertEqual(self.rra.os.name, "posix")
+            self.assertIs(self.rra.os.path, posixpath)
+        self.assertIs(self.rra.os, real_os)
+        self.assertIs(self.rra.os, os)
+        with self.assertRaises(RuntimeError):
+            with _simulate_posix_host(self.rra):
+                raise RuntimeError("x")
+        self.assertIs(self.rra.os, os, "例外時も復元されること")
+
+    def test_powershell_backslash_relative_resolved(self):
+        cases = {
+            "..\\..\\outside\\existing.txt": "/work/outside/existing.txt",
+            "..\\..\\outside\\other": "/work/outside/other",
+            "..\\../outside/x": "/work/outside/x",
+            ".\\a\\..\\b": "/work/repo/sub/b",
+            "..\\file.txt": "/work/repo/file.txt",
+            "\\work\\outside\\x": "/work/outside/x",
+        }
+        with _simulate_posix_host(self.rra):
+            for token, expected in cases.items():
+                with self.subTest(token):
+                    self.assertEqual(self.rra.resolve_path(token, "/work/repo/sub", "powershell"), expected)
+
+    def test_bash_dialect_unchanged(self):
+        """bash の `\\` はエスケープ・ファイル名の一部であり，区切りへの正規化は PowerShell に限る."""
+        with _simulate_posix_host(self.rra):
+            self.assertEqual(self.rra.resolve_path("../x", "/work/repo/sub", "bash"), "/work/repo/x")
+            self.assertEqual(self.rra.resolve_path("a\\b", "/work/repo", "bash"), "/work/repo/a\\b")
+
+    def test_no_windows_drive_conversion_on_posix(self):
+        """Git Bash 形式（/c/...）の変換は Windows のときだけ行う."""
+        with _simulate_posix_host(self.rra):
+            self.assertEqual(self.rra.convert_posix_drive("/c/Users/x"), "/c/Users/x")
+            self.assertEqual(self.rra.resolve_path("/c/Users/x", "/work/repo", "bash"), "/c/Users/x")
+            self.assertEqual(self.rra.resolve_path("/c/Users/x", "/work/repo", "powershell"), "/c/Users/x")
+
+    def test_powershell_remove_item_escaping_repo_denied(self):
+        """受け入れ条件: POSIX ホストでも `Remove-Item ..\\..\\outside\\x` が拒否される."""
+        with _simulate_posix_host(self.rra):
+            for cmd in ("Remove-Item ..\\..\\outside\\x", "Remove-Item ..\\..\\outside\\x -Recurse -Force",
+                        "cmd /c del ..\\..\\outside\\x", "cmd /c rd /s /q /work/outside/x"):
+                with self.subTest(cmd):
+                    reason = self.rra.check_powershell_command(cmd, "/work/repo/sub", repo_root="/work/repo", deny_read=[])
+                    self.assertIsNotNone(reason, f"拒否されるべき: {cmd}")
+            for cmd in ("Remove-Item ..\\x", "cmd /c rd /s /q ..\\build"):
+                with self.subTest(cmd):
+                    reason = self.rra.check_powershell_command(cmd, "/work/repo/sub", repo_root="/work/repo", deny_read=[])
+                    self.assertIsNone(reason, f"許可されるべき: {cmd} / 理由: {reason}")
+
+
+def _isabs_py313(path) -> bool:
+    """Python 3.13 以降の ntpath.isabs 相当（UNC・デバイスパスか，ドライブとルートを持つときだけ True）.
+
+    3.12 以前は `/tmp/x`・`\\tmp\\x` のようなドライブ無しの root-relative パスも True だった．
+    """
+    s = os.fspath(path)
+    if isinstance(s, bytes):
+        s = s.decode("utf-8", "surrogateescape")
+    s = s[:3].replace("/", "\\")
+    return (s.startswith("\\") and s.startswith("\\", 1)) or s.startswith(":\\", 1)
+
+
+@contextlib.contextmanager
+def _simulate_py313_ntpath_isabs():
+    """ntpath.isabs を Python 3.13 相当に差し替える（with を抜けると例外時も mock.patch が元に戻す）.
+
+    Windows ではフックの os.path は ntpath そのものなので，フックの os.path.isabs にも効く．
+    実行中の Python が 3.13 以降なら実質的に同じ挙動のまま（差し替えても結果は変わらない）．
+    """
+    with mock.patch.object(ntpath, "isabs", _isabs_py313):
+        yield
+
+
+class TestIsAbsoluteAllHosts(unittest.TestCase):
+    """is_absolute: ホスト OS に依存しない判定と，POSIX ホストの挙動が変わらないこと（全 OS で実行）."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.rra = _load_restrict()
+
+    def test_relative_and_native_absolute(self):
+        for path in ("x", "a/b", "../x", ".", ""):
+            with self.subTest(path=path):
+                self.assertFalse(self.rra.is_absolute(path), path)
+        native_abs = os.path.abspath("x")
+        self.assertTrue(self.rra.is_absolute(native_abs), native_abs)
+
+    def test_posix_host_slash_absolute_backslash_relative(self):
+        """POSIX ホストでは `/tmp/x` は絶対，`\\tmp\\x` は相対のまま（ファイル名の一部）."""
+        with _simulate_posix_host(self.rra):
+            self.assertTrue(self.rra.is_absolute("/tmp/x"))
+            self.assertTrue(self.rra.is_absolute("/"))
+            self.assertFalse(self.rra.is_absolute("\\tmp\\x"))
+            self.assertFalse(self.rra.is_absolute("\\"))
+            self.assertFalse(self.rra.is_absolute("C:\\x"))
+
+    def test_posix_host_resolve_backslash_root_stays_relative(self):
+        with _simulate_posix_host(self.rra):
+            self.assertEqual(self.rra.resolve_path("\\tmp\\x", "/work/repo", "bash"), "/work/repo/\\tmp\\x")
+            self.assertEqual(self.rra.resolve_path("/tmp/some-dir", "/work/repo", "bash"), "/tmp/some-dir")
+            self.assertTrue(self.rra.is_temp_path(self.rra.resolve_path("/tmp/some-dir", "/work/repo", "bash")))
+            self.assertIsNone(self.rra.check_bash_command("rm -rf /tmp/some-dir", "/work/repo",
+                                                          repo_root="/work/repo", deny_read=[]))
+
+    def test_posix_host_unaffected_by_ntpath_patch(self):
+        """ntpath の差し替えは POSIX ホスト相当（posixpath）の判定に影響しない."""
+        with _simulate_posix_host(self.rra), _simulate_py313_ntpath_isabs():
+            self.assertTrue(self.rra.is_absolute("/tmp/x"))
+            self.assertFalse(self.rra.is_absolute("\\tmp\\x"))
+            self.assertEqual(self.rra.resolve_path("/tmp/some-dir", "/work/repo", "bash"), "/tmp/some-dir")
+
+
+class TestPy313SimulationRestored(unittest.TestCase):
+    def test_patch_effective_and_restored(self):
+        original = ntpath.isabs
+        with _simulate_py313_ntpath_isabs():
+            self.assertFalse(ntpath.isabs("/tmp/x"))
+            self.assertFalse(ntpath.isabs("\\tmp\\x"))
+            self.assertTrue(ntpath.isabs("C:\\x"))
+            self.assertTrue(ntpath.isabs("C:/x"))
+            self.assertTrue(ntpath.isabs("\\\\server\\share\\x"))
+            self.assertFalse(ntpath.isabs("C:x"))
+        self.assertIs(ntpath.isabs, original)
+        with self.assertRaises(RuntimeError):
+            with _simulate_py313_ntpath_isabs():
+                raise RuntimeError("x")
+        self.assertIs(ntpath.isabs, original, "例外時も復元されること")
+
+
+class _WindowsRootRelativeCases:
+    """Windows でドライブ無しの root-relative パスを絶対パスとして扱うこと（Python のバージョンによらず）.
+
+    サブクラスの simulate() が ntpath.isabs の挙動（実行中の Python のまま / 3.13 相当）を切り替える．
+    """
+
+    def simulate(self):
+        raise NotImplementedError
+
+    def test_is_absolute_root_relative(self):
+        with self.simulate():
+            for path in ("/tmp/x", "\\tmp\\x", "/", "\\", "C:\\x", "C:/x", "\\\\server\\share\\x"):
+                with self.subTest(path=path):
+                    self.assertTrue(self.rra.is_absolute(path), path)
+            for path in ("x", "..\\x", "C:x", ""):
+                with self.subTest(path=path):
+                    self.assertFalse(self.rra.is_absolute(path), path)
+
+    def test_resolve_root_relative_not_joined_with_cwd(self):
+        with self.simulate():
+            for token, dialect in (("/tmp/some-dir", "bash"), ("/tmp/some-dir", "powershell"),
+                                   ("\\tmp\\some-dir", "powershell"), ("\\tmp\\some-dir", "bash")):
+                with self.subTest(token=token, dialect=dialect):
+                    resolved = self.rra.resolve_path(token, self.repo, dialect)
+                    self.assertEqual(resolved, "\\tmp\\some-dir")
+                    self.assertTrue(self.rra.is_temp_path(resolved), resolved)
+            # cwd が無くても（cwd 不明でも）絶対パスとして解決できる
+            self.assertEqual(self.rra.resolve_path("/tmp/some-dir", None, "bash"), "\\tmp\\some-dir")
+
+    def test_relative_still_joined_with_cwd(self):
+        with self.simulate():
+            self.assertEqual(os.path.normcase(self.rra.resolve_path("../file.txt", self.sub, "bash")),
+                             os.path.normcase(os.path.join(self.repo, "file.txt")))
+            self.assertEqual(os.path.normcase(self.rra.resolve_path("..\\file.txt", self.sub, "powershell")),
+                             os.path.normcase(os.path.join(self.repo, "file.txt")))
+
+    def test_rm_rf_tmp_allowed(self):
+        with self.simulate():
+            for cmd in ("rm -rf /tmp/some-dir", "rm -rf /tmp/some-dir/sub", "echo x > /tmp/some-file"):
+                with self.subTest(cmd):
+                    self.assertAllowed(self.bash(cmd), cmd)
+            for cmd in ("Remove-Item /tmp/some-dir -Recurse -Force", "Remove-Item \\tmp\\some-dir -Recurse"):
+                with self.subTest(cmd):
+                    self.assertAllowed(self.ps(cmd), cmd)
+
+    def test_tmp_escape_still_denied(self):
+        """/tmp/.. による脱出は温存しない（絶対パス扱いにしても一時ディレクトリ判定を緩めない）."""
+        with self.simulate():
+            self.assertDenied(self.bash("rm -rf /tmp/../some-dir"))
+            self.assertDenied(self.bash(f'rm -rf "{_fwd(os.path.join(self.out, "other"))}"'))
+
+    def test_deny_read_root_relative_entry_not_joined_with_repo_root(self):
+        cfg = os.path.join(self.repo, ".claude", "repo-access.json")
+        with open(cfg, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"deny_read": ["/foo", "\\bar\\baz", "secrets"]}))
+        with self.simulate():
+            entries = self.rra.load_deny_read(self.repo)
+        normed = [os.path.normcase(e) for e in entries]
+        self.assertIn(os.path.normcase("\\foo"), normed)
+        self.assertIn(os.path.normcase("\\bar\\baz"), normed)
+        self.assertIn(os.path.normcase(os.path.join(self.repo, "secrets")), normed)
+        self.assertEqual(len(entries), 3)
+
+
+@unittest.skipUnless(os.name == "nt", "ntpath の root-relative パス（ドライブ無しの /tmp・\\tmp）は Windows ホストのみの概念")
+class TestWindowsRootRelativeCurrentPython(_WindowsRootRelativeCases, RestrictSandboxMixin, unittest.TestCase):
+    """実行中の Python の ntpath.isabs のまま検証する."""
+
+    def simulate(self):
+        return contextlib.nullcontext()
+
+
+@unittest.skipUnless(os.name == "nt", "ntpath.isabs の 3.13 での変更は Windows（ntpath）でのみフックに影響する")
+class TestWindowsRootRelativePy313(_WindowsRootRelativeCases, RestrictSandboxMixin, unittest.TestCase):
+    """ntpath.isabs を Python 3.13 相当に差し替えて検証する（3.12 以前のホストでも 3.13+ の挙動を再現する）."""
+
+    def simulate(self):
+        return _simulate_py313_ntpath_isabs()
+
+    def test_temp_dir_allowed_existing_case(self):
+        """CI（windows-latest / Python 3.14）で失敗した test_temp_dir_allowed の /tmp ケースの再現."""
+        with self.simulate():
+            self.assertFalse(os.path.isabs("/tmp/some-dir"), "差し替えが効いていること")
+            self.assertAllowed(self.bash("rm -rf /tmp/some-dir"))
+
+
+class TestCmdSwitchDetection(unittest.TestCase):
+    """cmd.exe のスイッチとパスの区別（Issue #51 原因 1）．文字列だけの判定なので全 OS で実行する."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.rra = _load_restrict()
+
+    def test_switches(self):
+        for text in ("/s", "/q", "/S", "/Q", "/f", "/y", "/-y", "/+y", "/?", "/mir", "/MIR", "/purge", "/mov",
+                     "/move", "/e", "/a:h", "/A:-H", "/log:C:\\x\\log.txt", "/log:out.txt", "/r:3", "/w:10",
+                     "/xd", "/mt:8", "/b", "/c", "/k", "/x1"):
+            with self.subTest(text):
+                self.assertTrue(self.rra.is_cmd_switch(text), text)
+
+    def test_paths(self):
+        for text in ("/workspace/x", "/workspace/repo/outside/existing.txt", "/c/Users", "/c/", "/C/Users/x",
+                     "/tmp/x", "/home/user/.bashrc", "/cygdrive/c/x", "/s/x", "/a\\b", "//server/share",
+                     "C:\\x", "C:/x", "..\\x", "x", "", "/", "/1", "/-", "/:x", "/ s", "/.ssh"):
+            with self.subTest(text):
+                self.assertFalse(self.rra.is_cmd_switch(text), text)
 
 
 class TestRestrictReasons(RestrictSandboxMixin, unittest.TestCase):

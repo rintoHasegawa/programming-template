@@ -42,6 +42,8 @@
   ものであり，同じコマンド内で先に作ったファイルを上書きする場合等は許可される．
   逆にインライン実行は，削除系の呼び出しとリポジトリ外のパス（文字列・コメント中の
   ものも含む）が同時に現れると，削除対象でなくても拒否することがある．
+  cmd.exe の引数のうち /opt のように / の後に要素が 1 つだけのパスは，スイッチ
+  （/mir 等）と区別できないためスイッチとして読み飛ばす．
   ユーザーが `!` で実行したコマンドには本フックはかからない．確実性が必要な場合は
   OS のフォルダ権限，settings.json の permissions.deny，Bash / PowerShell の実行前に
   確認を挟む権限モード，バックアップを併用すること（docs/01_GUIDE/GUIDE_01 の環境構築）．
@@ -279,6 +281,19 @@ def convert_posix_drive(path: str) -> str:
     return path
 
 
+def is_absolute(path: str) -> bool:
+    """path を絶対パスとして扱うか（cwd と結合しないか）を判定する.
+
+    Python 3.13 以降の ntpath.isabs はドライブ無しの root-relative パス（`/tmp/x`・`\\tmp\\x`）を
+    False と判定するようになり，cwd と結合されて `D:\\tmp\\x` 等に化ける（/tmp の判定を外れる）．
+    Windows では Python のバージョンによらず `/`・`\\` 始まりを絶対パスとして扱い，3.12 以前の挙動に揃える．
+    POSIX ホストでは os.path.isabs（posixpath）の判定をそのまま使う．
+    """
+    if os.name == "nt" and path[:1] in ("/", "\\"):
+        return True
+    return os.path.isabs(path)
+
+
 def expand_variables(token: str, dialect: str) -> str | None:
     """`~`・$HOME 等の既知の変数を展開する．未知の変数が残れば None を返す."""
     token = expand_home(token)
@@ -326,8 +341,12 @@ def resolve_path(token: str, cwd: str | None, dialect: str = "bash") -> str | No
         return SPECIAL
     if dialect == "powershell" and re.match(r"^[A-Za-z][A-Za-z0-9]+:", token):
         return UNKNOWN  # Env: / HKLM: 等のファイルシステム以外のドライブ
+    if dialect == "powershell" and os.name != "nt":
+        # Linux / macOS の pwsh は `\` も区切りとして受け付けるが，os.path（posixpath）は `\` を
+        # 区切りと見なさず `..\..` を畳めない（リポジトリ内と誤判定する）ため，判定前に `/` へ揃える
+        token = token.replace("\\", "/")
     token = convert_posix_drive(token)
-    if not os.path.isabs(token):
+    if not is_absolute(token):
         if cwd is None:
             return UNKNOWN
         token = os.path.join(cwd, token)
@@ -403,7 +422,7 @@ def load_deny_read(repo_root: str) -> list:
         if not entry:
             continue
         entry = convert_posix_drive(expand_home(entry))
-        if not os.path.isabs(entry):
+        if not is_absolute(entry):
             entry = os.path.join(repo_root, entry)
         result.append(os.path.normpath(entry))
     return result
@@ -736,6 +755,16 @@ def collect_dotnet_calls(command: str, cwd: str | None, findings: Findings) -> N
 CMD_DELETE = {"del", "erase", "rd", "rmdir", "move", "ren", "rename"}
 CMD_COPY = {"copy", "xcopy", "robocopy"}
 
+# cmd.exe のスイッチ（/s・/q・/-y・/?・/mir・/a:h・/log:C:\x 等）．`/` の直後が英字（または - + ?）で，
+# 名前部分に区切り（`/`・`\`）を含まないもの．/workspace/x（POSIX の絶対パス）や /c/Users（Git Bash 形式）は
+# 名前部分に 2 つ目の区切りを含むのでパスとして扱う（OS によって判定が変わらないようにする）
+CMD_SWITCH = re.compile(r"^/[-+]?(?:\?|[A-Za-z][A-Za-z0-9]*)(?::.*)?$", re.DOTALL)
+
+
+def is_cmd_switch(text: str) -> bool:
+    """cmd.exe の引数 text がスイッチ（パスではない）かを判定する."""
+    return bool(CMD_SWITCH.match(text))
+
 
 def collect_cmd_exe(args: list, cwd: str | None, findings: Findings) -> None:
     """cmd /c 以降のコマンドから削除・上書きの対象と読み取りを拾う."""
@@ -753,7 +782,7 @@ def collect_cmd_exe(args: list, cwd: str | None, findings: Findings) -> None:
             if text.startswith(">"):
                 redirect_kind = CREATE if text.startswith(">>") else OVERWRITE
                 text = text.lstrip(">")
-            if text.startswith("/") and not re.match(r"^/[A-Za-z]/", text):
+            if is_cmd_switch(text):
                 continue  # /s /q 等のスイッチ
             resolved = resolve_path(text, cwd, "powershell")
             if resolved in (UNKNOWN, SPECIAL):
@@ -764,7 +793,7 @@ def collect_cmd_exe(args: list, cwd: str | None, findings: Findings) -> None:
                 redirect_kind = None
                 continue
             paths.append((text, resolved))
-        switches = {w.lower() for w in words[1:] if w.startswith("/")}
+        switches = {w.lower() for w in words[1:] if is_cmd_switch(w)}
         for idx, (text, resolved) in enumerate(paths):
             findings.reads.append(("cmd " + sub, text, resolved, False))
             is_last = idx == len(paths) - 1 and idx > 0

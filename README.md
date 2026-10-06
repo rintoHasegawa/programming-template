@@ -84,4 +84,4 @@ Remove-Item README.md
 - `GUIDE_02_エージェント運用ルール.md` — `/implement` のエージェントチーム運用
 - `GUIDE_03_チーム開発ルール.md` — **team モードのみ**．直列運用・条件付きセルフマージ・共有設定の扱い
 
-Git 規約（ブランチ命名・コミット書式）・ドキュメントの書式・ファイル命名・進捗記録・テンプレート改変記録のルールは `.claude/rules/`（`git-conventions` / `markdown-style` / `docs-naming` / `progress-log` / `template-customization`）にあり，Claude へ自動ロードされる（git-conventions は常時，他は該当ファイル編集時）．push・PR・マージの詳細手順は `.claude/skills/commit/reference.md`，Issues・Projects の `gh` 操作リファレンスは `.claude/skills/task-start/reference.md`，テンプレート同期の bash ヘルパー・個別マージ手順は `.claude/skills/sync-template/reference.md` にある．
+Git 規約（ブランチ命名・コミット書式）・ドキュメントの書式・ファイル命名・進捗記録・テンプレート改変記録・フックのクロスプラットフォーム対応のルールは `.claude/rules/`（`git-conventions` / `markdown-style` / `docs-naming` / `progress-log` / `template-customization` / `hooks-cross-platform`）にあり，Claude へ自動ロードされる（git-conventions は常時，他は該当ファイル編集時）．push・PR・マージの詳細手順は `.claude/skills/commit/reference.md`，Issues・Projects の `gh` 操作リファレンスは `.claude/skills/task-start/reference.md`，テンプレート同期の bash ヘルパー・個別マージ手順は `.claude/skills/sync-template/reference.md` にある．
