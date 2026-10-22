@@ -184,7 +184,7 @@ done
 
 ## 通常コピーループ (Copy Loop)
 
-ステップ 5.3 で実行する．判定は「同期対象外 → solo のチーム層 → マージ必須（既存あり）→ 台帳登録（既存あり）→ 未登録改変 → `cp`」の順．`cp` しなかったものはそれぞれ後段で処理する:
+ステップ 5.3 で実行する．判定は「同期対象外 → solo のチーム層 → マージ必須（既存あり）→ 台帳登録（既存あり）→ 未登録改変 → `cp`」の順．`cp` しなかったものはそれぞれ後段で処理する．なお `.claude/project-mode`・`.claude/project-board`・`.claude/verify-profile.md`・`.claude/repo-access.json` 等のプロジェクト所有ファイルはテンプレートに含まれないため `$CHANGED_ENTRIES` に現れず，本ループでも削除処理でも触れない（テンプレートリポジトリにこれらの実体を置かないこと）:
 
 ```bash
 echo "$CHANGED_ENTRIES" | while IFS=$'\t' read -r status file newfile; do

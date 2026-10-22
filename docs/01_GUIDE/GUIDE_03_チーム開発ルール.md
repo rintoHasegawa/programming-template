@@ -16,23 +16,32 @@ Git の規約は `.claude/rules/git-conventions.md`（push・PR・マージ手�
 
 ## タスク管理 (Task Management)
 
-進捗管理の補助として GitHub Issues と Projects を用いる．`gh` コマンドでの具体的な操作手順（スコープ・Projects 操作・トラブル対応）は `.claude/skills/task-start/reference.md` を参照．
+進捗管理の補助として GitHub Issues を用いる．Projects（ボード）は `.claude/project-board` を置いた場合のみ併用する（「Project ボード」参照）．`gh` コマンドでの具体的な操作手順（スコープ・Projects 操作・トラブル対応）は `.claude/skills/task-start/reference.md` を参照．
 
 ### Issue (Issue)
 
-Issue は**進捗管理の補助**として使う．追跡したい作業に対して立て，PR と紐付けてボードで可視化する．
+Issue は**進捗管理の補助**として使う．追跡したい作業に対して立て，PR と紐付けて可視化する（ボードを使う場合はボードにも載せる）．
 
 - 作業 1 単位 = 1 Issue を推奨する．既に Issue がある作業は，新たに作らずそれに従って進める（重複 Issue を作らない）．
 - **Issue は着手・PR 作成・マージのいずれの段階でも必須としない**．小さい変更（typo・1 行修正等）や試験的・探索的な作業は Issue 無しで進めてよい．
 - ただし**追跡する価値のある作業には Issue を立てるのが望ましい**（後追いと進捗可視化のため）．特に複数回の `/implement` に跨る作業や，他メンバーに見えていてほしい作業は Issue を作る．
-- PR と Issue を紐付ける場合は本文に `Closes #<Issue番号>` を記載する．マージ時に Issue が自動クローズされ，ボードのカードも `Done` へ移る．
+- PR と Issue を紐付ける場合は本文に `Closes #<Issue番号>` を記載する．マージ時に Issue が自動クローズされる（ボードを使う場合はカードも `Done` へ移る）．
 - Issue 本文には少なくとも「やること」を書く．「完了条件（受け入れ基準）」は非自明な作業のみで構わない．
 - 担当者は明確にしておくのが望ましい（重複着手を避けるため）．
 - Issue は最初に書き切らなくてよい．作業途中の進捗・確定事項は `/task-handoff` の進捗メモとして Issue に集約し，完了は PR の `Closes #<番号>` によるマージ時の自動クローズで反映する（`/implement` のフローでは Issue を更新しない）．
 
 ### Project ボード (Project Board)
 
-> ⚠ **既定では未使用**．タスク管理は Issue ベース（`gh issue list`）で運用する．Project ボードはチームが拡大したり Issue が常時 10 件超になった等の局面で再導入する想定．以下は将来導入時の参考．
+> ⚠ **既定では使わない**．タスク管理は Issue ベース（`gh issue list`）で運用し，`/task-create`・`/task-start`・`/task-handoff` は Projects に一切触れない（`project` スコープも不要）．チームが拡大したり Issue が常時 10 件超になった等の局面でボードが必要になったら，**`.claude/project-board` を置いたときのみ**ボードを使う（手順は「管理者の初期設定」）．ボードの有効化は `/set-mode`（solo / team の切替）とは独立しており，team でも必須ではない．
+
+`.claude/project-board` の書式（対象の Project を番号で明示する．`gh project list` による探索はしない）:
+
+```text
+owner=<リポジトリ所有者>
+number=<Project 番号>
+```
+
+ボードを使う場合の運用:
 
 - 列: `Todo` / `In Progress` / `In Review` / `Done`．
 - Issue をカードとして配置し，状態を移動して可視化する．
@@ -44,12 +53,12 @@ Issue を立てる場合の標準フロー（小さい変更や探索的作業�
 
 ```text
 1. Issue 起票（完了条件を明記）
-2. 自分にアサイン（ボード未使用のためアサインのみ．ボード運用復活時は In Progress へ移動）
+2. 自分にアサイン（.claude/project-board がある場合はボードの In Progress へも移動）
 3. main から作業ブランチ作成（git-conventions ルール）
 4. /implement に Issue の内容を渡して実装（GUIDE_02）
 5. PR 作成，本文に "Closes #<番号>"
 6. セルフマージ条件を確認 → マージ
-7. マージで Issue 自動クローズ → カード自動 Done
+7. マージで Issue 自動クローズ（ボード使用時はカード自動 Done）
 ```
 
 - 上記 1 は `/task-create`（事前定義用），2 と 3 は `/task-start <Issue番号>`（既存 Issue から着手）で半自動化できる．Issue 無しで進める場合はどちらも不要．
@@ -119,7 +128,7 @@ CI が未構築の間は「CI 緑」を以下で代替する．CI 構築後は�
 
 ## 作業の直列化 (Serialized Work)
 
-- 原則として，同時に進行中のコード作業は 1 件とする（進行中の Issue は原則 1 件．Project ボード運用復活時は `In Progress` 列も同様）．
+- 原則として，同時に進行中のコード作業は 1 件とする（進行中の Issue は原則 1 件．`.claude/project-board` でボードを使う場合は `In Progress` 列も同様）．
 - 次の作業に着手してよいのは，前の作業の PR が `main` にマージされた後とする（マージ条件は「レビューとマージ」参照）．
 - タスクは小さく保つ．直列運用では，1 単位が小さいほど次の人の待ち時間が短くなる．
 - 直列運用により並行コンフリクトと共有設定のドリフトは原理的にほぼ発生しない．例外的に並行が生じてコンフリクトした場合は `.claude/skills/commit/reference.md` の rebase 手順をフォールバックとして用いる．
@@ -132,7 +141,7 @@ CI が未構築の間は「CI 緑」を以下で代替する．CI 構築後は�
 1. リポジトリへのコラボレーター招待を承認する（GitHub の通知，または `https://github.com/<owner>/<repo>/invitations`）．
 2. リポジトリを clone する．
 3. `ENV_02_環境構築手順.md`（GUIDE_01 参照，立ち上げ時に作成）に従い開発環境を構築する．
-4. `gh auth login` で GitHub CLI を認証する．Projects も操作する場合は `project` スコープを含める（`.claude/skills/task-start/reference.md`「必要なスコープ」）．
+4. `gh auth login` で GitHub CLI を認証する．`.claude/project-board` があるプロジェクト（ボードを使う場合）のみ，`gh auth refresh -s project` で `project` スコープを追加する（`.claude/skills/task-start/reference.md`「必要なスコープ」）．
 5. 必要なら `.claude/settings.local.json` を用意する（個人設定．git 追跡されない）．
 6. 最初に `CLAUDE.md` と `docs/01_GUIDE/` を読む（特に本ガイドと GUIDE_02）．Git 規約は `.claude/rules/git-conventions.md` にある．
 7. `.gitignore` が整備されていることを確認する（`.claude/rules/git-conventions.md`）．
@@ -143,8 +152,11 @@ CI が未構築の間は「CI 緑」を以下で代替する．CI 構築後は�
 
 - GitHub リポジトリの作成，メンバー招待．
   - リポジトリ作成後，**GitHub リポジトリのセキュリティ設定**（Dependabot alerts / security updates の有効化）は AI が `gh api` で行う（`/setup` の Phase 3・7 で実行．コマンド・検証・トラブル対応は `.claude/skills/setup/reference.md`「GitHub リポジトリのセキュリティ設定」，背景は GUIDE_01「環境構築」）．`/setup` 完了後にリポジトリを作成した場合は，同 `reference.md` または `ENV_03_管理者用環境構築手順.md` に転記したコマンドを実行する（管理者が直接実行してもよい）．
-- （既定では未使用）GitHub Project の作成，列（`Todo` / `In Progress` / `In Review` / `Done`）の定義．
-- （既定では未使用）マージ連動の自動化設定（PR マージ時に Issue クローズ・カードを `Done` へ移動）．
+- （任意．既定では使わない）Project ボードを使い始める場合は以下を行う．
+  1. GitHub Project を作成し，列（`Todo` / `In Progress` / `In Review` / `Done`）を定義する．マージ連動の自動化（PR マージ時にカードを `Done` へ移動）も設定する．
+  2. `.claude/project-board` を作成し，`owner=<リポジトリ所有者>` と `number=<Project 番号>` を書く（番号は `gh project list --owner <owner>` で確認できる．書式は「Project ボード」参照）．共有設定の変更として専用 PR で取り込む（「共有設定の扱い」）．
+  3. マージ後，全員が `git pull` し，`gh auth refresh -s project` で `project` スコープを追加する．
+  - ボードをやめる場合は `.claude/project-board` を削除する（以後 `/task-*` は Projects に触れない）．
 - Issue テンプレートの用意（「やること」「完了条件」欄）．
 - 共有設定変更 PR に他メンバー Approve を求める運用の周知（必要なら `main` のブランチ保護設定）．
 - CI の構築（全テストを実行し，緑をマージ条件にできる状態にする）．

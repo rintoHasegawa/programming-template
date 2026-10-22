@@ -85,7 +85,7 @@ bash ヘルパーの定義と各ファイルの個別マージ手順は本スキ
 - **`solo`**: チーム層ファイルを同期対象外ファイルと同様に**完全スキップ**（コピー・上書き・削除いずれもしない）．solo プロジェクトは `/setup` 時にこれらを削除済みのため，再配置しない．
 - **`.claude/project-mode` が存在しない**（本機能導入前に作られた既存プロジェクト）: 安全側に倒して **`solo` 扱い**とし，チーム層を配置しない．同期の最後に「チーム開発なら `.claude/project-mode` に `team` と記入し再同期してください」と案内する．
 
-なお `.claude/project-mode` 自体はテンプレートに含まれない（`/setup` が各プロジェクトで生成する）ため，同期で触れることはない．
+なお `.claude/project-mode` 自体はテンプレートに含まれない（`/setup` が各プロジェクトで生成する）ため，同期で触れることはない．Project ボードの有効化ファイル `.claude/project-board`（GUIDE_03「Project ボード」）も同様にプロジェクト所有でテンプレートに含まれず，モードとも独立しているため同期で触れない．
 
 ## ステップ 1: 事前確認
 
@@ -330,5 +330,5 @@ CHANGED_ENTRIES=$(cd "$TEMP_DIR" && find . -type f -not -path "./.git/*" | sed '
 - 台帳への登録は必ず理由を添える（ユーザーから聞く）．理由の無い登録は次回同期時の判断材料にならない．台帳の書式（パス列はバッククォート囲み，方針列は `keep` / `merge` / `ask`）を崩さない
 - 同期対象外ファイル（`README.md`）はテンプレート紹介用のためプロジェクトには反映しない．テンプレート側で追加・変更・削除があってもプロジェクトの該当ファイルは触らない
 - チーム層ファイル（`GUIDE_03`／`check_sync.sh`）は `.claude/project-mode` が `team` のプロジェクトにのみ同期する．`task-*` skill は共通層のためモードに関わらず同期する．`solo`（または未設定）のプロジェクトには配置・更新・削除いずれもしない．`/sync-template` は「版の追従」のみを行い，**モードの切り替えはしない**．solo↔team の切替は `/set-mode <solo|team>` を使う（team 層ファイルの配置／削除・`settings.json` 配線・`CLAUDE.md` の team 化／solo 化・`project-mode` 更新を一括で行う）．`.claude/project-mode` を手で書き換えるだけでは切り替わらない
-- テンプレートが管理するのは `.claude/` 配下のうち `agents/`，`skills/`，`rules/`，`hooks/`，`settings.json`，`template-sync-sha`，`template-overrides.md`（雛形のみ．登録内容はプロジェクト固有）のみ．`.claude/plans/`・`.claude/commit-context.md`・`.claude/verify-profile.md`（検証プロファイル．テンプレートが持つのは雛形 `.claude/skills/verify/profile-template.md` のみ）・`.claude/repo-access.json`（リポジトリ外アクセス制限フックの禁止リスト．GUIDE_01「環境構築」）等のプロジェクト固有ファイルはテンプレートに含まれないため同期対象外（`$CHANGED_ENTRIES` に現れず，コピー・上書き・削除のいずれも起きない）
+- テンプレートが管理するのは `.claude/` 配下のうち `agents/`，`skills/`，`rules/`，`hooks/`，`settings.json`，`template-sync-sha`，`template-overrides.md`（雛形のみ．登録内容はプロジェクト固有）のみ．`.claude/plans/`・`.claude/commit-context.md`・`.claude/verify-profile.md`（検証プロファイル．テンプレートが持つのは雛形 `.claude/skills/verify/profile-template.md` のみ）・`.claude/repo-access.json`（リポジトリ外アクセス制限フックの禁止リスト．GUIDE_01「環境構築」）・`.claude/project-mode`・`.claude/project-board`（Project ボードの有効化と対象 Project の指定．`.claude/skills/task-start/reference.md`「ボード設定の判定」）等のプロジェクト固有ファイルはテンプレートに含まれないため同期対象外（`$CHANGED_ENTRIES` に現れず，コピー・上書き・削除のいずれも起きない）
 - `chore/sync-template` ブランチは他の作業ブランチと混ぜず，作成後は速やかにマージすること．複数の作業ブランチで `/sync-template` を実行すると `.claude/template-sync-sha` がコンフリクトする．コンフリクト時は新しい（HEAD 側の）SHA を採用すること．
