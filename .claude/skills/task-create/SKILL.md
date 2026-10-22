@@ -31,17 +31,18 @@ ops-runner エージェントを起動し，プロンプトに以下を含める
 - 確定した Issue タイトル・本文（そのまま使い，書き換えないこと）
 - 確認が必要な事態では停止して報告すること
 
-エージェントが確認事項（Project が複数ある等）で停止した場合は，ユーザーに確認して再委譲する．
+エージェントが確認事項（`.claude/project-board` の書式不正・スコープエラー等）で停止した場合は，ユーザーに確認して再委譲する．
 
 ## ステップ 4: 完了サマリー (Summary)
 
 エージェントの報告をもとに以下を提示する:
 
 - **Issue**: 番号・タイトル・URL
-- **ボード**: Todo（Project が無い場合は「未追加（ボード未使用）」と表記する）
+- **ボード**: Todo（`.claude/project-board` が無い場合は「未追加（ボード未使用）」と表記する）
 - **次の手順**: 「このタスクに着手する場合は `/task-start <Issue番号>` を実行してください．」
 
 ## 注意事項 (Notes)
 
 - 複数タスクを一括で作る場合は，本コマンドを複数回実行してください
-- Projects 操作には `project` スコープが必要．スコープエラーの停止報告が来たら `gh auth refresh -s project` をユーザーに案内する（`.claude/skills/task-start/reference.md`「必要なスコープ」）
+- Projects（ボード）は既定では使わず，`.claude/project-board` があるときだけ操作する（`.claude/skills/task-start/reference.md`「ボード設定の判定」）
+- `.claude/project-board` がある場合に限り `project` スコープが必要．スコープエラーの停止報告が来たら `gh auth refresh -s project` をユーザーに案内する（`.claude/skills/task-start/reference.md`「必要なスコープ」）

@@ -13,14 +13,32 @@ team モードでの運用方針（Issue = 作業単位，直列運用，ボー�
 | 操作 | 必要スコープ |
 | --- | --- |
 | Issues の読み書き | `repo` |
-| Projects の読み書き | `repo` ＋ `project` |
+| Projects の読み書き（`.claude/project-board` を置いた場合のみ） | `repo` ＋ `project` |
+
+既定（`.claude/project-board` が無い）では Projects に一切触れないため，`project` スコープは不要．`.claude/project-board` を置いてボードを使う場合のみ，全員が `project` スコープを追加する．
 
 スコープの確認と追加:
 
 ```bash
 gh auth status                  # 現在のスコープを確認
-gh auth refresh -s project      # Projects 用スコープを追加（対話的な再認証が走る）
+gh auth refresh -s project      # Projects 用スコープを追加（ボードを使う場合のみ．対話的な再認証が走る）
 ```
+
+## ボード設定の判定 (Board Config)
+
+Projects（ボード）は**既定では使わない**．`.claude/project-board` が存在するときだけボードを操作する．`/task-create`・`/task-start`・`/task-handoff` の各手順は，最初に以下で判定する．
+
+- **`.claude/project-board` が無い（既定）**: ボード未使用．`gh project` 系のコマンドを一切呼ばない（Project の探索もしない）．進行中の作業は `gh issue list --assignee @me --state open` で数える．報告のボード状態は「ボード未使用」とする
+- **`.claude/project-board` がある**: ファイルに書かれた `owner` / `number` の Project に対して「Projects の操作」を行う（`gh project list` による探索はしない）．`owner` か `number` が欠けている・`number` が数値でない場合は，停止して確認事項として報告する．`gh project` がスコープエラーになった場合は，停止して「`gh auth refresh -s project` の実行が必要」と報告する
+
+判定は `test -f .claude/project-board` で行い，ある場合は Read（または `cat .claude/project-board`）で内容を読む．書式は以下（1 行 1 項目．`#` で始まる行と空行は無視する）:
+
+```text
+owner=<リポジトリ所有者（個人またはオーガニゼーション）>
+number=<Project 番号>
+```
+
+※ `.claude/project-board` はプロジェクト所有のファイルであり，テンプレートには含まれず `/sync-template` でも触られない．作成手順は GUIDE_03「管理者の初期設定」を参照．
 
 ## ブランチと Issue のリンク (Branch-Issue Link)
 
@@ -34,21 +52,21 @@ gh issue develop <Issue番号> --name feature/<概要> --base main
 
 `/task-create` の司令塔（メインループ）から，確定済みの Issue タイトル・本文を受け取った ops-runner が実行する．
 
-1. **Project の特定**: `gh repo view --json owner --jq .owner.login` で所有者を取得し，`gh project list --owner <owner>` で Project を特定する．複数ある場合は停止して確認事項として報告する．見つからない場合はボード追加を飛ばして進める（Project ボードは既定では未使用のため，無くても問題ない）
+1. **ボード設定の判定**: 「ボード設定の判定」に従い `.claude/project-board` の有無を確認する（無ければ以降のボード操作をすべて飛ばす）
 2. **Issue 作成**: 渡されたタイトル・本文を**そのまま**使い，`gh issue create --title "<タイトル>" --body "<本文>"` で作成する（本文を書き換えない）．担当者はアサインしない
-3. **ボードに追加**: 「Projects の操作」に従い `item-add` → Status を `Todo` に設定 → `item-list` で結果を確認する（Project が無い場合は飛ばす）
-4. **報告**: Issue 番号・タイトル・URL・ボード状態を返す
+3. **ボードに追加**（`.claude/project-board` がある場合のみ）: 「Projects の操作」に従い，ファイルの `owner` / `number` に対して `item-add` → Status を `Todo` に設定 → `item-list` で結果を確認する
+4. **報告**: Issue 番号・タイトル・URL・ボード状態（`.claude/project-board` が無ければ「ボード未使用」）を返す
 
 ## /task-start 実行手順 (task-start Execution Flow)
 
 `/task-start` の司令塔から Issue 番号を受け取った ops-runner が実行する．ブランチ命名は `.claude/rules/git-conventions.md` に従う．
 
 1. **前提確認**: `git status` を確認し，未コミットの変更があれば停止して報告する．`git branch --show-current` を確認し，`main` 以外にいる場合は `git log main..HEAD --oneline` で未マージコミットを確認し，残っていれば停止して報告する（直列運用の原則）
-2. **直列運用チェック**: 所有者を取得し Project を特定する（複数なら停止して報告．無ければボード操作を飛ばす）．進行中の作業を数える（Project があれば `item-list` で Status が `In Progress` のもの，無ければ `gh issue list --assignee @me --state open`）．対象 Issue 以外に 1 件以上あれば，該当タスクの一覧を添えて停止して報告する（禁止ではなく原則）
+2. **直列運用チェック**: 「ボード設定の判定」に従い `.claude/project-board` の有無を確認する．進行中の作業を数える（`.claude/project-board` があればその Project の `item-list` で Status が `In Progress` のもの，無ければ `gh issue list --assignee @me --state open`）．対象 Issue 以外に 1 件以上あれば，該当タスクの一覧を添えて停止して報告する（禁止ではなく原則）
 3. **対象 Issue の確認・アサイン**: `gh issue view <Issue番号>` で内容を確認する（存在しない・クローズ済み・他人がアサイン済みの場合は停止して報告する）．`gh issue edit <Issue番号> --add-assignee @me` で自分をアサインする
-4. **ボードを In Progress へ**: 「Projects の操作」に従い，未追加なら `item-add` → Status を `In Progress` に変更 → `item-list` で結果を確認する（Project が無い場合は飛ばす）
+4. **ボードを In Progress へ**（`.claude/project-board` がある場合のみ）: 「Projects の操作」に従い，未追加なら `item-add` → Status を `In Progress` に変更 → `item-list` で結果を確認する
 5. **作業ブランチ作成**: `git checkout main && git pull origin main` で `main` を最新化し，`git checkout -b <ブランチ名>` する．ブランチ名は司令塔から渡されていればそれを使い，無ければ Issue タイトルから規約どおり（プレフィックス＋英単語 2〜4 語．Issue 番号は含めない）決めて，決めた名前とプレフィックスの選択理由を報告に含める
-6. **報告**: Issue 番号・タイトル・URL・ボード状態・作成したブランチ名を返す
+6. **報告**: Issue 番号・タイトル・URL・ボード状態（`.claude/project-board` が無ければ「ボード未使用」）・作成したブランチ名を返す
 
 ※ ステップ 1〜3 の停止条件に複数該当する場合は，まとめて 1 回の報告で返す（司令塔との往復を減らす）．司令塔から「ユーザー承認済み」と明示された項目では停止しない．
 
@@ -58,7 +76,7 @@ gh issue develop <Issue番号> --name feature/<概要> --base main
 
 ### 収集フェーズ (Collect)
 
-1. 所有者を取得し Project を特定する（無くても問題ない）．着手中の Issue を抽出する（Project があれば `item-list` で Status が `In Progress` のもの，無ければ `gh issue list --assignee @me --state open`）
+1. 「ボード設定の判定」に従い `.claude/project-board` の有無を確認する．着手中の Issue を抽出する（`.claude/project-board` があればその Project の `item-list` で Status が `In Progress` のもの，無ければ `gh issue list --assignee @me --state open`）
 2. 0 件ならその旨を報告して終了する．複数件なら一覧（番号・タイトル）を確認事項として返す
 3. 対象 Issue について以下を収集して返す:
    - `gh issue view <Issue番号> --json number,title,body,comments`（本文と過去コメントを**原文のまま**返す．要約・取捨選択はしない．コメントが多い場合は直近の「進捗メモ」コメントを優先して原文で返し，古いものは件数と日付だけにする）
@@ -71,14 +89,14 @@ gh issue develop <Issue番号> --name feature/<概要> --base main
 
 ## Projects の操作 (Projects)
 
-> ⚠ **Projects（ボード）は既定では未使用**．以下は将来導入時の参考として残す．
+> ⚠ **`.claude/project-board` がある場合のみ行う**（「ボード設定の判定」参照）．無い場合は本節の操作を一切行わない．
 
-※ `gh project` 系は `project` スコープが必要（「必要なスコープ」参照）．`<owner>` はリポジトリ所有者（個人またはオーガニゼーション）．
+※ `gh project` 系は `project` スコープが必要（「必要なスコープ」参照）．`<owner>` と `<Project番号>` は `.claude/project-board` の `owner` / `number` を使う．
 
 ### 参照 (View)
 
 ```bash
-gh project list --owner <owner>                      # プロジェクト一覧（Project 番号を確認）
+gh project list --owner <owner>                      # プロジェクト一覧（.claude/project-board 作成時に Project 番号を確認する用．手順内では使わない）
 gh project view <Project番号> --owner <owner>         # プロジェクトの概要
 gh project item-list <Project番号> --owner <owner>    # ボード上のアイテム一覧
 gh project field-list <Project番号> --owner <owner>   # フィールド（Status 等）と選択肢の ID を確認
@@ -106,7 +124,7 @@ gh project item-edit \
 
 ## トラブルシューティング (Troubleshooting)
 
-- **`gh project` の書き込み系が無反応に見える**: `create` / `item-add` / `item-edit` は成功しても標準出力が空のことがある．`gh project list` / `item-list` で結果を確認する．
-- **`gh project` がスコープエラーになる**: `project` スコープが未付与．`gh auth refresh -s project` を実行する．
+- **`gh project` の書き込み系が無反応に見える**: `create` / `item-add` / `item-edit` は成功しても標準出力が空のことがある．`item-list`（Project 作成直後は `gh project list`）で結果を確認する．
+- **`gh project` がスコープエラーになる**: `.claude/project-board` を置いたのに `project` スコープが未付与．`gh auth refresh -s project` を実行する（ボードを使わないなら `.claude/project-board` を削除すればスコープは不要）．
 - **コラボレーターが操作できない**: 招待を承認していない．`gh api "repos/<owner>/<repo>/collaborators" --jq '.[].login'` で承認済みメンバーを確認する．
 - **`item-edit` の ID がわからない**: `gh project item-list` でアイテム ID，`gh project field-list` でフィールド ID・選択肢 ID を確認する．

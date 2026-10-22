@@ -33,12 +33,13 @@ ops-runner エージェントを起動し，プロンプトに以下を含める
 エージェントの報告をもとに以下を提示する:
 
 - **Issue**: 番号・タイトル・URL
-- **ボード**: In Progress（Project が無い場合は「アサインのみ（ボード未使用）」と表記する）
+- **ボード**: In Progress（`.claude/project-board` が無い場合は「アサインのみ（ボード未使用）」と表記する）
 - **ブランチ**: 作成したブランチ名
 - **次の手順**: 「`/implement` に対象 Issue の内容を渡して実装を開始してください（`gh issue view <Issue番号>` で取得できます）．」
 
 ## 注意事項 (Notes)
 
 - branch↔Issue の紐付けは，後の PR 本文の `Closes #<Issue番号>` で行う．ブランチ名には番号を入れない
-- Projects 操作には `project` スコープが必要．スコープエラーの停止報告が来たら `gh auth refresh -s project` をユーザーに案内する（`reference.md`「必要なスコープ」）
+- Projects（ボード）は既定では使わず，`.claude/project-board` があるときだけ操作する（`reference.md`「ボード設定の判定」）
+- `.claude/project-board` がある場合に限り `project` スコープが必要．スコープエラーの停止報告が来たら `gh auth refresh -s project` をユーザーに案内する（`reference.md`「必要なスコープ」）
 - 新規 Issue を立てる場合は `/task-create`，Issue 無しで進める場合は本コマンドを使わず直接 `/implement` 等へ

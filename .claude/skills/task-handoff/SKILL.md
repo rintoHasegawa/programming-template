@@ -9,7 +9,7 @@ argument-hint: "<追加メモ（省略可）>"
 
 本スキルは **solo / team 両モードで使用できる**．引継ぎ情報は Issue コメントに集約する．
 
-- **team モード**: GUIDE_03（チーム開発ルール）の「進捗は Issues / Projects と git 履歴で追う」方針に沿う（`CLAUDE.md` に進捗は書かない）
+- **team モード**: GUIDE_03（チーム開発ルール）の「進捗は Issues と git 履歴で追う」方針に沿う（`CLAUDE.md` に進捗は書かない）
 - **solo モード**: 通常の進捗記録（`.claude/rules/progress-log.md`．`CLAUDE.md` 進捗欄＋ `docs/PROGRESS.md`）は従来どおり運用し，本スキルはタスク単位の引継ぎメモを Issue に残す補助として使う
 
 ## ステップ 1: 収集の委譲 (Collect)
@@ -91,4 +91,5 @@ ops-runner エージェントを起動し，「/task-handoff 実行手順」の*
 
 - 本コマンドは Issue を**クローズしない・Done に動かさない**．着手中のまま残す（作業継続前提）．完了させたい場合は別途 `/commit merge` で PR をマージ → `Closes #<番号>` で自動クローズ
 - 進捗メモは**コメント**として投稿する．Issue 本文は書き換えない
-- Projects 操作には `project` スコープが必要．スコープエラーの停止報告が来たら `gh auth refresh -s project` をユーザーに案内する（`.claude/skills/task-start/reference.md`「必要なスコープ」）
+- 着手中 Issue の特定は，`.claude/project-board` が無ければ（既定）自分にアサインされたオープンな Issue で行い，Projects には触れない．ファイルがある場合のみボードの `In Progress` を見る（`.claude/skills/task-start/reference.md`「ボード設定の判定」）
+- `.claude/project-board` がある場合に限り `project` スコープが必要．スコープエラーの停止報告が来たら `gh auth refresh -s project` をユーザーに案内する（`.claude/skills/task-start/reference.md`「必要なスコープ」）
