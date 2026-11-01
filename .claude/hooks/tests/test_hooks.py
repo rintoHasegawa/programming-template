@@ -2245,17 +2245,10 @@ class TestRestrictMemoryLinks(MemorySandboxMixin, unittest.TestCase):
         self.assertAllWriteOpsDenied(os.path.join(link, "session.jsonl"))
 
     def test_link_inside_memory_then_dot_dot(self):
-        """memory/escape/../x は OS が escape の先の親（memory の外）として解決する.
-
-        上書き系（Write・リダイレクト等）は変更前から通っている既存の穴のため，ここでは見ない.
-        """
+        """memory/escape/../x は OS が escape の先の親（memory の外）として解決する（上書き系を含む全操作）."""
         link = os.path.join(self.memory, "escape")
         self.link_dir(os.path.join(self.out, "dir"), link)
-        ops = self.write_ops(os.path.join(link, "..", "existing.txt"))
-        for label in ("Edit", "MultiEdit", "bash rm", "bash rm -rf", "bash truncate", "bash mv",
-                      "ps Remove-Item", "ps Remove-Item -Force", "ps Move-Item"):
-            with self.subTest(op=label):
-                self.assertDenied(ops[label], label)
+        self.assertAllWriteOpsDenied(os.path.join(link, "..", "existing.txt"))
 
     def test_wildcard_matching_link_inside_memory(self):
         """memory/*/file.txt はシェルが展開すると memory/escape/file.txt（memory の外の実体）になる."""
@@ -2641,6 +2634,762 @@ class TestRestrictMemoryWindows(MemorySandboxMixin, unittest.TestCase):
         if result.returncode != 0:
             self.skipTest("ジャンクションを作成できない環境")
         self.assertAllWriteOpsDenied(os.path.join(self.memory, "file.txt"))
+
+
+# ---------------------------------------------------------------------------
+# Issue #59: 波括弧・ワイルドカード・cd -・リンクの後の `..` の検出漏れ
+# ---------------------------------------------------------------------------
+class TestExpandBraces(unittest.TestCase):
+    """expand_braces が実際の Bash の波括弧展開と同じ結果を返すこと（期待値は bash 5 で確認したもの）."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.rra = _load_restrict()
+
+    def test_same_as_bash(self):
+        cases = {
+            "plain": ["plain"],
+            "a{b,c}d": ["abd", "acd"],
+            "{a,{b,c}}": ["a", "b", "c"],
+            "{{a,b}}": ["{a}", "{b}"],
+            "a{b,c}d{e,f}": ["abde", "abdf", "acde", "acdf"],
+            "x/{a,../y/z}": ["x/a", "x/../y/z"],
+            "{1..3}": ["1", "2", "3"],
+            "{3..1}": ["3", "2", "1"],
+            "{01..03}": ["01", "02", "03"],
+            "{a..c}": ["a", "b", "c"],
+            "{c..a}": ["c", "b", "a"],
+            "{1..5..2}": ["1", "3", "5"],
+            "{-1..1}": ["-1", "0", "1"],
+            "{1..2}{a,b}": ["1a", "1b", "2a", "2b"],
+            "{a,b}}": ["a}", "b}"],
+            "{{a,b}": ["{a", "{b"],
+            "x{a,b}y}z": ["xay}z", "xby}z"],
+            "{a,b{c,d}}e": ["ae", "bce", "bde"],
+        }
+        for word, expected in cases.items():
+            with self.subTest(word):
+                self.assertEqual(self.rra.expand_braces(word), expected)
+
+    def test_literal_when_bash_does_not_expand(self):
+        for word in ("{a}", "{}", "{a,b", "a,b}", "{1..a}", "{a..1}", "${VAR}", "${a,b}", "{../outside/x}"):
+            with self.subTest(word):
+                self.assertEqual(self.rra.expand_braces(word), [word])
+
+    def test_variable_followed_by_brace(self):
+        self.assertEqual(self.rra.expand_braces("${x}{a,b}"), ["${x}a", "${x}b"])
+
+    def test_expansion_limit_boundary(self):
+        limit = self.rra.MAX_BRACE_EXPANSIONS
+        self.assertEqual(limit, 256)
+        self.assertEqual(len(self.rra.expand_braces("{1..256}")), 256)
+        self.assertIsNone(self.rra.expand_braces("{1..257}"))
+        self.assertEqual(len(self.rra.expand_braces("{a,b}{1..128}")), 256)
+        self.assertIsNone(self.rra.expand_braces("{a,b}{1..129}"))
+        self.assertEqual(len(self.rra.expand_braces("{%s}" % ",".join(str(n) for n in range(256)))), 256)
+        self.assertIsNone(self.rra.expand_braces("{%s}" % ",".join(str(n) for n in range(257))))
+
+    def test_huge_or_deep_words_end_quickly(self):
+        """巨大な順序式・多重の波括弧でフックが止まらない（タイムアウトすると検査が効かない）."""
+        for word in ("{1..1000000000}", "{a,b}" * 40, "{,}" * 40, "{a," * 1000 + "}" * 1000, "x" * 5000 + "{a,b}"):
+            with self.subTest(word[:20]):
+                self.assertIsNone(self.rra.expand_braces(word))
+
+
+class Issue59SandboxMixin(MemorySandboxMixin):
+    """リポジトリ内に src/ 等を足す（誤拒否のテスト用）."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.o = _fwd(self.out)
+        self.r = _fwd(self.repo)
+        self.m = _fwd(self.memory)
+        self.p = _fwd(self.projects)
+
+    def touch(self, *parts: str) -> str:
+        path = os.path.join(*parts)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("x")
+        return path
+
+    def make_repo_escape(self) -> str:
+        """repo/escape → outside/dir のリンクを作る."""
+        link = os.path.join(self.repo, "escape")
+        self.link_dir(os.path.join(self.out, "dir"), link)
+        return link
+
+    def make_memory_escape(self) -> str:
+        link = os.path.join(self.memory, "escape")
+        self.link_dir(os.path.join(self.out, "dir"), link)
+        return link
+
+    def assertBashDenied(self, commands, cwd: str | None = None) -> None:
+        for cmd in commands:
+            with self.subTest(cmd):
+                self.assertDenied(self.bash(cmd, cwd=cwd), cmd)
+
+    def assertBashAllowed(self, commands, cwd: str | None = None) -> None:
+        for cmd in commands:
+            with self.subTest(cmd):
+                self.assertAllowed(self.bash(cmd, cwd=cwd), cmd)
+
+    def assertPsDenied(self, commands, cwd: str | None = None) -> None:
+        for cmd in commands:
+            with self.subTest(cmd):
+                self.assertDenied(self.ps(cmd, cwd=cwd), cmd)
+
+    def assertPsAllowed(self, commands, cwd: str | None = None) -> None:
+        for cmd in commands:
+            with self.subTest(cmd):
+                self.assertAllowed(self.ps(cmd, cwd=cwd), cmd)
+
+
+class TestRestrictBraceDelete(Issue59SandboxMixin, unittest.TestCase):
+    """波括弧で外に出る削除は拒否される."""
+
+    def test_brace_escape_from_repo(self):
+        r = self.r
+        self.assertBashDenied([
+            f"rm {r}/{{a,../outside/existing.txt}}",
+            f"rm -f {r}/{{a,../outside/existing.txt}}",
+            f'rm "{r}"/{{a,../outside/existing.txt}}',
+            f"rm {r}/{{a,../outside}}/existing.txt",
+            f"rm {r}/{{a,..}}/outside/existing.txt",
+            f"rm -rf {r}/{{a,../outside/dir}}",
+            f"rm {r}/{{../outside,x}}/*",
+            f"rmdir {r}/{{a,../outside/dir}}",
+            f"mv {r}/{{a,../outside/existing.txt}} {r}/sub/",
+        ])
+
+    def test_relative_brace_escape(self):
+        self.assertBashDenied(["rm {a,../outside/existing.txt}", "rm -rf sub/{a,../../outside/dir}"])
+
+    def test_brace_escape_via_prefix_and_nested_shell(self):
+        r = self.r
+        self.assertBashDenied([
+            f"sudo rm {r}/{{a,../outside/existing.txt}}",
+            f"env X=1 rm {r}/{{a,../outside/existing.txt}}",
+            f"bash -c 'rm {r}/{{a,../outside/existing.txt}}'",
+            f"true && rm {r}/{{a,../outside/existing.txt}}",
+        ])
+
+    def test_brace_directly_outside(self):
+        self.assertBashDenied([f"rm {self.o}/{{existing.txt,dir/file.txt}}", f"rm {self.o}/{{dir,other}}/*"])
+
+    def test_single_alternative_is_not_expanded(self):
+        """`{x}` はコンマが無いので Bash は展開しない（文字どおりの，リポジトリ内の名前）."""
+        self.assertBashAllowed([f"rm {self.r}/{{../outside/existing.txt}}"])
+
+
+class TestRestrictBraceWithinRepoAllowed(Issue59SandboxMixin, unittest.TestCase):
+    """リポジトリ内で閉じる波括弧・ワイルドカードは拒否しない（実体の有無によらない）."""
+
+    COMMANDS = ("rm src/{a,b}.txt", "rm src/*/x.txt", "cp a.txt {b,c}/", "mv src/*.txt dst/", "rm src/{1..3}.txt",
+                "rm -rf src/{a,b}", "sed -i s/x/y/ src/{a,b}.txt", "echo y | tee src/{a,b}.txt", "echo y > src/a.txt")
+
+    def test_without_files(self):
+        self.assertBashAllowed(self.COMMANDS)
+
+    def test_with_files(self):
+        for name in ("a.txt", "b.txt", "1.txt", "2.txt", "3.txt", os.path.join("d1", "x.txt"), os.path.join("d2", "x.txt")):
+            self.touch(self.repo, "src", name)
+        self.touch(self.repo, "a.txt")
+        for d in ("b", "c", "dst"):
+            os.makedirs(os.path.join(self.repo, d))
+        self.assertBashAllowed(self.COMMANDS)
+
+    def test_absolute_paths(self):
+        self.touch(self.repo, "src", "d1", "x.txt")
+        self.assertBashAllowed([f"rm {self.r}/src/{{a,b}}.txt", f"rm {self.r}/src/*/x.txt", f"rm {self.r}/src/{{1..3}}.txt"])
+
+    def test_dot_dot_staying_inside_repo(self):
+        self.assertBashAllowed([f"rm {self.r}/sub/{{a,../file.txt}}", "rm sub/{a,../file.txt}"])
+
+
+class TestRestrictBraceNotPathArgument(Issue59SandboxMixin, unittest.TestCase):
+    """パス引数でない波括弧で誤拒否しない."""
+
+    def test_echo(self):
+        self.assertBashAllowed(["echo '{a,b}'", "echo {a,b}", 'echo "{a,../../../outside/existing.txt}"'])
+
+    def test_json_redirected_into_repo(self):
+        self.assertBashAllowed([
+            """echo '{"a": 1, "b": 2}' > out.json""",
+            """echo '{"a":{"b":[1,2]},"c":"../../x"}' > out.json""",
+            """printf '{"a":1,"b":2}' | tee out.json""",
+        ])
+
+    def test_variable_reference(self):
+        self.assertBashAllowed(["echo ${HOME}", "echo ${a,b}"])
+
+
+class TestRestrictBraceLimit(Issue59SandboxMixin, unittest.TestCase):
+    """波括弧の上限超え（1 語 256 展開超）が削除・上書きの対象なら拒否する."""
+
+    def test_over_limit_targets_are_denied(self):
+        for base in (self.r + "/f", "f", self.o + "/f"):
+            with self.subTest(base):
+                self.assertBashDenied([
+                    f"rm {base}{{1..257}}",
+                    f"rm {base}{{1..1000000000}}",
+                    f"echo y > {base}{{1..257}}",
+                    f"echo y | tee {base}{{1..257}}",
+                    f"sed -i s/x/y/ {base}{{1..257}}",
+                    f"cp file.txt {base}{{1..257}}",
+                    f"mv {base}{{1..257}} sub/",
+                ])
+
+    def test_over_limit_copy_source_is_denied(self):
+        self.assertBashDenied([f"cp x{{1..257}} {self.o}/dir/", f"cp {self.r}/x{{1..257}} {self.o}/dir/"])
+
+    def test_over_limit_in_other_form_is_denied(self):
+        self.assertBashDenied(["dd if=/dev/zero of=f{1..257}", "rm f{a,b}{1..129}"])
+
+    def test_at_limit_is_judged_normally(self):
+        self.assertBashAllowed(["rm f{1..256}", "echo y | tee f{1..256}", "rm f{a,b}{1..128}"])
+
+    def test_over_limit_not_a_target_is_allowed(self):
+        self.assertBashAllowed([
+            "echo {1..257}",
+            "echo {1..257} > out.txt",
+            "seq 1 3 | grep x{1..257}",
+            "ls f{1..257}",
+            "echo " + "x" * 5000 + "{a,b} > out.txt",
+        ])
+
+    def test_powershell_does_not_expand(self):
+        self.assertPsAllowed([f"Remove-Item {self.r}/f{{1..257}}", "Set-Content f{1..257} y"])
+
+    def test_via_main_is_denied(self):
+        env = dict(os.environ, CLAUDE_PROJECT_DIR=self.repo)
+        data = {"tool_name": "Bash", "tool_input": {"command": "rm f{1..257}"}, "cwd": self.repo}
+        self.assertEqual(self.decision(self.run_main(data, env)), "deny")
+        data["tool_input"] = {"command": "rm f{1..256}"}
+        self.assertIsNone(self.decision(self.run_main(data, env)))
+
+
+class TestRestrictWildcardOverwrite(Issue59SandboxMixin, unittest.TestCase):
+    """途中の階層のワイルドカードが既存ファイルに一致する上書きは拒否する."""
+
+    def forms_bash(self, path: str) -> list:
+        return [f"echo y > {path}", f"echo y | tee {path}", f"sed -i s/x/y/ {path}"]
+
+    def forms_ps(self, path: str) -> list:
+        return [f"Set-Content {path} y", f"echo y > {path}", f"echo y | Out-File {path}"]
+
+    def test_projects_wildcard(self):
+        path = f"{self.p}/*/memory/note.md"
+        self.assertBashDenied(self.forms_bash(path))
+        self.assertPsDenied(self.forms_ps(path))
+
+    def test_projects_wildcard_without_transcript(self):
+        self.transcript_path = None
+        path = f"{self.p}/*/memory/note.md"
+        self.assertBashDenied(self.forms_bash(path))
+        self.assertPsDenied(self.forms_ps(path))
+
+    def test_outside_wildcards(self):
+        for tail in ("*/file.txt", "d*/file.txt", "di?/file.txt", "[d]ir/file.txt", "*.txt", "exist*"):
+            path = f"{self.o}/{tail}"
+            self.assertBashDenied(self.forms_bash(path))
+            self.assertPsDenied(self.forms_ps(path))
+
+    def test_relative_wildcard(self):
+        self.assertBashDenied(["echo y > ../outside/*/file.txt"])
+        self.assertBashDenied(["echo y > */file.txt"], cwd=self.out)
+        self.assertPsDenied(["Set-Content */file.txt y"], cwd=self.out)
+
+    def test_hidden_name_is_matched_on_the_safe_side(self):
+        self.touch(self.out, ".hidden", "only.txt")
+        self.assertBashDenied([f"echo y > {self.o}/*/only.txt"])
+        self.assertPsDenied([f"Set-Content {self.o}/*/only.txt y"])
+
+
+class TestRestrictOutsideCreateAllowed(Issue59SandboxMixin, unittest.TestCase):
+    """リポジトリ外への新規作成は拒否しない（一致の無いワイルドカードを含む）."""
+
+    def test_new_file(self):
+        self.assertBashAllowed([f"echo y > {self.o}/new.txt", f"echo y | tee {self.o}/new.txt"])
+        self.assertPsAllowed([f"Set-Content {self.o}/new.txt y", f"echo y > {self.o}/new.txt"])
+
+    def test_wildcard_without_match(self):
+        path = f"{self.o}/*/none/new.txt"
+        self.assertBashAllowed([f"echo y > {path}", f"echo y | tee {path}"])
+        self.assertPsAllowed([f"Set-Content {path} y", f"echo y > {path}"])
+        self.assertBashAllowed([f"echo y > {self.o}/none*.txt"])
+
+    def test_brace_to_new_files(self):
+        self.assertBashAllowed([f"echo y | tee {self.o}/{{new1,new2}}.txt"])
+
+
+class TestRestrictBraceOverwriteFromMemory(Issue59SandboxMixin, unittest.TestCase):
+    """波括弧でメモのフォルダの外に出る上書きは拒否する."""
+
+    def test_brace_escape_to_transcript(self):
+        tail = "{note.md,../session.jsonl}"
+        self.touch(self.out, "x", "a")
+        self.assertBashDenied([
+            f"sed -i s/x/y/ {self.m}/{tail}",
+            f"echo y | tee {self.m}/{tail}",
+            f"cp {self.o}/x/a {self.m}/{{a,../session.jsonl}}",
+            f"rm {self.m}/{tail}",
+            f"echo y > {self.m}/{tail}",
+        ])
+
+    def test_brace_with_transcript_outside_repo(self):
+        self.transcript_path = None
+        self.assertBashDenied([f"sed -i s/x/y/ {self.m}/{{note.md,../session.jsonl}}"])
+
+
+class TestRestrictMemoryBraceStaysDenied(Issue59SandboxMixin, unittest.TestCase):
+    """メモのフォルダの中で閉じていても，波括弧・`..` は従来どおり許可しない（緩めていない）."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.touch(self.deep_dir, "x")
+
+    def test_brace_inside_memory(self):
+        m = self.m
+        self.assertBashDenied([
+            f"rm {m}/{{note.md,sub/x}}",
+            f"echo y > {m}/{{note.md,sub/x}}",
+            f"sed -i s/x/y/ {m}/{{note.md,sub/x}}",
+        ])
+
+    def test_dot_dot_inside_memory(self):
+        self.assertBashDenied([f"rm {self.m}/sub/../note.md"])
+        self.assertPsDenied([f"Remove-Item {self.m}/sub/../note.md"])
+
+
+class TestRestrictMemoryTailStaysAllowed(Issue59SandboxMixin, unittest.TestCase):
+    """既存のメモのフォルダの許可が，リンクがある状態でも保たれること."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.make_memory_escape()
+
+    def test_tail_wildcard_with_link_present(self):
+        m = self.m
+        self.assertBashAllowed([f"rm {m}/*", f"rm {m}/*.md", f"rm {m}/sub/*", f"rm -rf {m}/*"])
+        self.assertPsAllowed([f"Remove-Item {m}/*", f"Remove-Item {m}/*.md", f"Remove-Item {m}/sub/*"])
+
+    def test_plain_overwrite_with_link_present(self):
+        self.assertBashAllowed([f"echo y > {self.m}/note.md", f"echo y | tee {self.m}/note.md"])
+        self.assertPsAllowed([f"Set-Content {self.m}/note.md y"])
+
+    def test_content_destroying_commands_follow_the_link(self):
+        """truncate・shred・Clear-Content はリンク先の中身を壊すので，一致したリンクのリンク先も判定する."""
+        m = self.m
+        self.assertBashDenied([f"truncate -s 0 {m}/*", f"shred {m}/*", f"truncate -s 0 {m}/esc*"])
+        self.assertPsDenied([f"Clear-Content {m}/*", f"Clear-Content {m}/esc*"])
+
+
+class TestRestrictCopySourceBrace(Issue59SandboxMixin, unittest.TestCase):
+    """コピー元の波括弧・ワイルドカードは，展開後の名前でコピー先の既存ファイルを判定する."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        for root in (self.repo, self.out):
+            self.touch(root, "src", "x", "a")
+            self.touch(root, "src", "x", "b")
+        self.dest = os.path.join(self.out, "dest")
+        os.makedirs(self.dest)
+        self.d = _fwd(self.dest)
+
+    def test_existing_in_dest_is_denied(self):
+        self.touch(self.dest, "a")
+        for src in (f"{self.r}/src", f"{self.o}/src", "src"):
+            for dest in (f"{self.d}/", self.d):
+                self.assertBashDenied([f"cp {src}/x/{{a,b}} {dest}", f"cp {src}/x/* {dest}", f"mv {src}/x/{{a,b}} {dest}"])
+        self.assertPsDenied([f"Copy-Item {self.r}/src/x/* {self.d}/"])
+
+    def test_second_alternative_existing_is_denied(self):
+        self.touch(self.dest, "b")
+        self.assertBashDenied([f"cp {self.r}/src/x/{{a,b}} {self.d}/"])
+
+    def test_nothing_existing_in_dest_is_allowed(self):
+        self.touch(self.dest, "c")
+        self.assertBashAllowed([f"cp {self.r}/src/x/{{a,b}} {self.d}/", f"cp {self.r}/src/x/* {self.d}/"])
+        self.assertPsAllowed([f"Copy-Item {self.r}/src/x/* {self.d}/"])
+
+
+class TestRestrictLinkThenDotDotInRepo(Issue59SandboxMixin, unittest.TestCase):
+    """リポジトリ内の途中のリンクの後の `..` はリンク先の親へ上がる."""
+
+    def test_all_write_ops(self):
+        link = self.make_repo_escape()
+        self.assertAllWriteOpsDenied(os.path.join(link, "..", "existing.txt"))
+
+    def test_new_file_through_link_is_allowed(self):
+        link = self.make_repo_escape()
+        path = _fwd(os.path.join(link, "..", "brand_new.txt"))
+        self.assertBashAllowed([f"echo y > {path}", f"echo y | tee {path}"])
+        self.assertPsAllowed([f"Set-Content {path} y"])
+        self.assertAllowed(self.tool("Write", {"file_path": os.path.join(link, "..", "brand_new.txt"), "content": "y"}))
+
+    def test_dot_dot_without_link_stays_in_repo(self):
+        path = os.path.join(self.repo, "sub", "..", "file.txt")
+        self.assertAllWriteOpsAllowed(path)
+
+    def test_relative_path(self):
+        self.make_repo_escape()
+        self.assertBashDenied(["rm escape/../existing.txt", "echo y > escape/../existing.txt"])
+        self.assertPsDenied(["Set-Content escape/../existing.txt y"])
+        self.assertDenied(self.tool("Write", {"file_path": os.path.join("escape", "..", "existing.txt"), "content": "y"}))
+
+
+class TestRestrictWildcardMatchingLinkInRepo(Issue59SandboxMixin, unittest.TestCase):
+    """リポジトリ内のワイルドカードが外へのリンクに一致する場合."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.make_repo_escape()
+
+    def test_intermediate_wildcard_is_denied(self):
+        path = f"{self.r}/*/file.txt"
+        self.assertBashDenied([f"rm {path}", f"echo y > {path}", f"echo y | tee {path}", f"sed -i s/x/y/ {path}",
+                               "rm */file.txt"])
+        self.assertPsDenied([f"Remove-Item {path}", f"Set-Content {path} y", f"echo y > {path}"])
+
+    def test_intermediate_wildcard_new_file_is_allowed(self):
+        path = f"{self.r}/*/brand_new.txt"
+        self.assertBashAllowed([f"echo y > {path}"])
+        self.assertPsAllowed([f"Set-Content {path} y"])
+
+    def test_brace_to_outside_directory(self):
+        self.assertBashDenied([f"rm -rf {self.r}/{{a,../outside/dir}}"])
+
+    def test_tail_wildcard_only_removes_the_link(self):
+        """rm 等は一致したリンク自体を消すだけで，リンク先には触らない."""
+        r = self.r
+        self.assertBashAllowed([f"rm {r}/*", f"rm -rf {r}/*", f"rm -rf {r}/esc*", "rm -rf *", f"mv {r}/esc* {r}/sub/"])
+        self.assertPsAllowed([f"Remove-Item {r}/*", f"Remove-Item {r}/* -Recurse", f"Remove-Item {r}/esc* -Recurse"])
+
+    def test_tail_wildcard_with_slash_reaches_link_target(self):
+        """`*/` は末尾の / でリンクをたどるので，rm -rf はリンク先の中身を消す（Git Bash・Linux の rm で確認）."""
+        r = self.r
+        self.assertBashDenied([f"rm -rf {r}/*/", f"rm -rf {r}/esc*/", "rm -rf */"])
+
+    def test_tail_wildcard_with_content_destroying_commands_is_denied(self):
+        r = self.r
+        self.assertBashDenied([f"truncate -s 0 {r}/*", f"shred {r}/*", f"truncate -s 0 {r}/esc*"])
+        self.assertPsDenied([f"Clear-Content {r}/*", f"Clear-Content {r}/esc*"])
+
+    def test_tail_wildcard_file_link_with_content_destroying_commands(self):
+        link = os.path.join(self.repo, "link.txt")
+        try:
+            os.symlink(self.existing, link)
+        except OSError:
+            if os.name != "nt":
+                raise
+            self.skipTest("Windows でシンボリックリンクの作成権限が無い（ファイルにはジャンクションを使えない）")
+        r = self.r
+        self.assertBashDenied([f"truncate -s 0 {r}/*.txt", f"shred {r}/link*"])
+        self.assertPsDenied([f"Clear-Content {r}/link*"])
+        self.assertBashAllowed([f"rm {r}/link*"])
+
+    def test_copy_into_link_matched_by_wildcard(self):
+        """cp・mv のコピー先のワイルドカードがリンクに一致すると，リンク先のディレクトリへ書き込む."""
+        r = self.r
+        self.assertBashDenied([f"cp {r}/x/file.txt {r}/esc*", f"mv {r}/x/file.txt {r}/esc*"])
+        self.assertBashAllowed([f"cp {r}/x/brand_new.txt {r}/esc*"])
+
+
+class TestRestrictPowerShellBraceIsLiteral(Issue59SandboxMixin, unittest.TestCase):
+    """PowerShell は波括弧を展開しないので文字どおりの名前として扱う."""
+
+    def test_literal_brace_stays_inside_repo(self):
+        self.assertPsAllowed([
+            f"Remove-Item '{self.r}/{{a,../outside/existing.txt}}'",
+            f"Remove-Item {self.r}/{{a,../outside/existing.txt}}",
+            f"Set-Content '{self.r}/{{a,../outside/existing.txt}}' y",
+        ])
+
+    def test_bash_c_inside_powershell_expands(self):
+        self.assertPsDenied([f"bash -c 'rm {self.r}/{{a,../outside/existing.txt}}'"])
+
+
+class TestRestrictCdMinus(Issue59SandboxMixin, unittest.TestCase):
+    """cd - / Set-Location - は同じコマンド内で追跡できる場合だけ解決する."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.x = self.touch(self.out, "x")
+
+    def test_returns_to_outside_is_denied(self):
+        for d in (f"{self.o}/dir", f"{self.r}/sub", f"{self.m}/sub", f"{self.r}"):
+            self.assertBashDenied([f"cd {d} && cd - && rm x", f"cd {d}; cd -; rm -f x"], cwd=self.out)
+            self.assertPsDenied([f"Set-Location {d}; Set-Location -; Remove-Item x", f"sl {d}; sl -; Remove-Item x"],
+                                cwd=self.out)
+
+    def test_inside_nested_shell_is_denied(self):
+        self.assertBashDenied([f"bash -c 'cd {self.r}/sub && cd - && rm x'"], cwd=self.out)
+
+    def test_returns_to_repo_is_allowed(self):
+        for d in (f"{self.m}/sub", f"{self.o}/dir", f"{self.r}/sub"):
+            self.assertBashAllowed([f"cd {d} && cd - && rm x"])
+            self.assertPsAllowed([f"Set-Location {d}; Set-Location -; Remove-Item x"])
+
+    def test_cd_minus_twice_toggles(self):
+        self.assertBashDenied([f"cd {self.r}/sub && cd {self.o} && cd - && cd - && rm x"])
+        self.assertBashAllowed([f"cd {self.o} && cd - && rm x", f"cd {self.o} && cd - && cd - && cd - && rm x"])
+
+    def test_set_location_plus_goes_forward(self):
+        self.assertPsDenied([f"Set-Location {self.o}; Set-Location -; Set-Location +; Remove-Item x"])
+        self.assertPsAllowed([f"Set-Location {self.o}; Set-Location -; Remove-Item x"])
+
+    def test_subshell_restores_previous_directory(self):
+        self.assertBashDenied([f"cd {self.r}/sub && (cd {self.o}/dir) && cd - && rm x"], cwd=self.out)
+        self.assertBashDenied([f"cd {self.o} && (cd - && rm x) && rm x"])
+
+    def test_untrackable_stays_unresolved(self):
+        """コマンドより前の移動先は分からないので，従来どおり未解決（判定しない）."""
+        for cwd in (self.repo, self.out):
+            self.assertBashAllowed(["cd - && rm x", "cd -; rm x"], cwd=cwd)
+            self.assertPsAllowed(["Set-Location -; Remove-Item x", "Set-Location +; Remove-Item x"], cwd=cwd)
+        self.assertBashAllowed([f"(cd {self.r}/sub) && cd - && rm x"], cwd=self.out)
+
+    def test_absolute_target_after_unresolved_is_still_denied(self):
+        self.assertBashDenied([f"cd - && rm {self.o}/x"])
+        self.assertPsDenied([f"Set-Location -; Remove-Item {self.o}/x"])
+
+
+class TestRestrictWildcardMatchLimit(Issue59SandboxMixin, unittest.TestCase):
+    """一致が上限（1 パス 1000 件）を超えると，基点がリポジトリ内・一時ディレクトリなら許可，それ以外は拒否."""
+
+    def make_dirs(self, parent: str, start: int, stop: int) -> None:
+        for n in range(start, stop):
+            os.makedirs(os.path.join(parent, "d%d" % n))
+
+    def test_outside_boundary(self):
+        many = os.path.join(self.out, "many")
+        self.make_dirs(many, 0, 1000)
+        cmd = f"echo y > {_fwd(many)}/*/nope.txt"
+        ps_cmd = f"Set-Content {_fwd(many)}/*/nope.txt y"
+        self.assertAllowed(self.bash(cmd), "ちょうど上限なら全部調べられる")
+        self.assertAllowed(self.ps(ps_cmd), "ちょうど上限なら全部調べられる")
+        self.make_dirs(many, 1000, 1001)
+        self.assertDenied(self.bash(cmd), "上限超え")
+        self.assertDenied(self.ps(ps_cmd), "上限超え")
+
+    def test_inside_repo_over_limit_is_allowed(self):
+        many = os.path.join(self.repo, "many")
+        self.make_dirs(many, 0, 1001)
+        self.assertAllowed(self.bash(f"echo y > {_fwd(many)}/*/nope.txt"))
+        self.assertAllowed(self.bash(f"rm {_fwd(many)}/*"))
+        self.assertAllowed(self.ps(f"Remove-Item {_fwd(many)}/*"))
+
+    def test_with_small_limit(self):
+        temp = tempfile.mkdtemp(prefix="_restrict_limit_")
+        self.addCleanup(shutil.rmtree, temp, True)
+        for parent in (os.path.join(self.repo, "many"), os.path.join(self.out, "many"), os.path.join(temp, "many")):
+            self.make_dirs(parent, 0, 6)
+        with mock.patch.object(self.rra, "MAX_WILDCARD_MATCHES", 5):
+            self.assertAllowed(self.bash(f"echo y > {self.r}/many/*/nope.txt"))
+            self.assertAllowed(self.bash(f"echo y > {_fwd(temp)}/many/*/nope.txt"))
+            self.assertDenied(self.bash(f"echo y > {self.o}/many/*/nope.txt"))
+            self.assertAllowed(self.ps(f"Set-Content {self.r}/many/*/nope.txt y"))
+            self.assertAllowed(self.ps(f"Set-Content {_fwd(temp)}/many/*/nope.txt y"))
+            self.assertDenied(self.ps(f"Set-Content {self.o}/many/*/nope.txt y"))
+
+    def test_memory_base_over_limit_is_denied(self):
+        """基点がメモのフォルダでも，リポジトリ内・一時ディレクトリではないので拒否する."""
+        self.make_dirs(self.memory, 0, 6)
+        with mock.patch.object(self.rra, "MAX_WILDCARD_MATCHES", 5):
+            self.assertDenied(self.bash(f"rm {self.m}/*"))
+
+    def test_new_file_append_is_not_undecidable(self):
+        many = os.path.join(self.out, "many")
+        self.make_dirs(many, 0, 6)
+        with mock.patch.object(self.rra, "MAX_WILDCARD_MATCHES", 5):
+            self.assertAllowed(self.bash(f"echo y >> {_fwd(many)}/*/nope.txt"))
+
+    def test_scan_budget_is_reset_per_command(self):
+        many = os.path.join(self.out, "many")
+        self.make_dirs(many, 0, 3)
+        cmd = f"echo y > {_fwd(many)}/*/nope.txt"
+        with mock.patch.object(self.rra, "MAX_WILDCARD_SCANS", 5):
+            for _ in range(4):
+                self.assertAllowed(self.bash(cmd))
+        with mock.patch.object(self.rra, "MAX_WILDCARD_SCANS", 1):
+            self.assertDenied(self.bash(cmd))
+
+
+class TestRestrictExpansionInTemp(Issue59SandboxMixin, unittest.TestCase):
+    """一時ディレクトリ配下の波括弧・ワイルドカードも誤拒否しない."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.temp = tempfile.mkdtemp(prefix="_restrict_expansion_")
+        self.addCleanup(shutil.rmtree, self.temp, True)
+        self.t = _fwd(self.temp)
+        self.assertTrue(self.rra.is_temp_path(self.temp))
+
+    def fill(self) -> None:
+        for name in ("a.txt", "b.txt", "1.txt", "2.txt", os.path.join("d1", "x.txt"), os.path.join("d2", "x.txt")):
+            self.touch(self.temp, "src", name)
+        self.touch(self.temp, "a.txt")
+        for d in ("b", "c", "dst"):
+            os.makedirs(os.path.join(self.temp, d))
+
+    def test_relative_and_absolute(self):
+        t = self.t
+        self.fill()
+        self.assertBashAllowed(["rm src/{a,b}.txt", "rm src/*/x.txt", "cp a.txt {b,c}/", "mv src/*.txt dst/",
+                                "rm src/{1..3}.txt", "echo y > src/*/x.txt", "sed -i s/x/y/ src/*/x.txt"], cwd=self.temp)
+        self.assertBashAllowed([f"rm {t}/src/{{a,b}}.txt", f"rm {t}/src/*/x.txt", f"cp {t}/a.txt {t}/{{b,c}}/",
+                                f"mv {t}/src/*.txt {t}/dst/", f"rm {t}/src/{{1..3}}.txt", f"echo y > {t}/src/*/x.txt"])
+        self.assertPsAllowed([f"Remove-Item {t}/src/*/x.txt", f"Set-Content {t}/src/*/x.txt y"])
+
+    def test_link_out_of_temp_is_denied(self):
+        self.link_dir(os.path.join(self.out, "dir"), os.path.join(self.temp, "escape"))
+        t = self.t
+        self.assertBashDenied([f"rm {t}/*/file.txt", f"echo y > {t}/*/file.txt", f"rm {t}/escape/../existing.txt"])
+        self.assertPsDenied([f"Set-Content {t}/*/file.txt y"])
+
+
+class TestRestrictFileToolsLiteralWildcard(Issue59SandboxMixin, unittest.TestCase):
+    """ファイル操作ツールは `..` だけをたどり，ワイルドカード・波括弧は文字どおりの名前として扱う."""
+
+    def test_wildcard_is_not_expanded_by_write(self):
+        self.make_repo_escape()
+        self.assertAllowed(self.tool("Write", {"file_path": os.path.join(self.out, "*", "file.txt"), "content": "y"}))
+        self.assertAllowed(self.tool("Write", {"file_path": os.path.join(self.repo, "*", "file.txt"), "content": "y"}))
+        self.assertAllowed(self.tool("Edit", {"file_path": os.path.join(self.repo, "*", "file.txt")}))
+
+    def test_brace_is_not_expanded(self):
+        path = self.r + "/{a,../outside/existing.txt}"
+        self.assertAllowed(self.tool("Write", {"file_path": path, "content": "y"}))
+
+    def test_dot_dot_after_link_is_followed(self):
+        link = self.make_memory_escape()
+        path = os.path.join(link, "..", "existing.txt")
+        self.assertDenied(self.tool("Write", {"file_path": path, "content": "y"}))
+        self.assertDenied(self.tool("Edit", {"file_path": path}))
+
+    def test_via_main(self):
+        link = self.make_memory_escape()
+        path = os.path.join(link, "..", "existing.txt")
+        env = dict(os.environ, CLAUDE_PROJECT_DIR=self.repo)
+        data = {"tool_name": "Write", "tool_input": {"file_path": path, "content": "y"}, "cwd": self.repo,
+                "transcript_path": self.session}
+        self.assertEqual(self.decision(self.run_main(data, env)), "deny")
+        data["tool_input"] = {"file_path": self.note, "content": "y"}
+        self.assertIsNone(self.decision(self.run_main(data, env)))
+
+
+class TestRestrictTrailingSeparatorLinkInRepo(Issue59SandboxMixin, unittest.TestCase):
+    """リポジトリ内の外へのリンク．Bash は末尾の / でリンク先の中身を消す．PowerShell はリンクしか消さない."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.make_repo_escape()
+
+    def test_wildcard_with_trailing_slash_is_denied(self):
+        r = self.r
+        self.assertBashDenied([f"rm -rf {r}/esc*/", f"rm -rf {r}/*/", "rm -rf ./*/", "rm -rf esc*//", "rm -rf {esc*,sub}/"])
+
+    def test_through_command_prefix_and_nested_shell_is_denied(self):
+        r = self.r
+        self.assertBashDenied(["sudo rm -rf */", f"bash -c 'rm -rf {r}/*/'"])
+
+    def test_literal_link_with_trailing_slash_is_denied(self):
+        r = self.r
+        self.assertBashDenied([f"rm -rf {r}/escape/", f"rm -rf {r}/escape//", "rm -rf escape//",
+                               f"rm -rf {r}/sub/../escape/", "rm -rf sub/../escape/"])
+
+    def test_without_trailing_slash_is_allowed(self):
+        r = self.r
+        self.assertBashAllowed([f"rm {r}/*", f"rm -rf {r}/*", "rm -rf esc*", "rm -rf *", f"mv {r}/esc* {r}/sub/"])
+
+    def test_powershell_removes_only_the_link(self):
+        r = self.r
+        self.assertPsAllowed([f"Remove-Item {r}/*/ -Recurse", f"Remove-Item {r}/esc*/ -Recurse",
+                              "Remove-Item esc*/ -Recurse"])
+
+    @unittest.skipUnless(os.name == "nt", "\\ が PowerShell のパスの末尾の区切りとして実測できているのは Windows だけ")
+    def test_powershell_backslash_removes_only_the_link(self):
+        self.assertPsAllowed([f"Remove-Item {self.r}/esc*\\ -Recurse", "Remove-Item esc*\\ -Recurse"])
+
+
+class TestRestrictTrailingSeparatorNoLinkInRepo(Issue59SandboxMixin, unittest.TestCase):
+    """リンクが無ければ，末尾の / があってもリポジトリ内の削除は誤拒否しない."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.touch(self.repo, "src", "a", "x.txt")
+
+    def test_is_allowed(self):
+        self.assertBashAllowed(["rm -rf src/*/", "rm -rf */", f"rm -rf {self.r}/src/"])
+
+
+class TestRestrictTrailingSeparatorInTemp(Issue59SandboxMixin, unittest.TestCase):
+    """一時ディレクトリの中の外へのリンク．文字列では一時ディレクトリの中でも，消えるのはリンク先の中身."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.temp = tempfile.mkdtemp(prefix="_restrict_trailing_")
+        self.addCleanup(shutil.rmtree, self.temp, True)
+        self.t = _fwd(self.temp)
+        self.assertTrue(self.rra.is_temp_path(self.temp))
+        self.touch(self.temp, "src", "a", "x.txt")
+
+    def test_link_with_trailing_slash_is_denied(self):
+        self.link_dir(os.path.join(self.out, "dir"), os.path.join(self.temp, "escape"))
+        t = self.t
+        self.assertBashDenied([f"rm -rf {t}/*/", f"rm -rf {t}/esc*/", f"rm -rf {t}/escape/"])
+
+    def test_no_link_is_allowed(self):
+        t = self.t
+        self.assertBashAllowed([f"rm -rf {t}/*/", f"rm -rf {t}/src/*/", f"rm -rf {t}/src/"])
+        self.assertBashAllowed(["rm -rf src/*/", "rm -rf */"], cwd=self.temp)
+
+
+class TestRestrictTrailingSeparatorInMemory(Issue59SandboxMixin, unittest.TestCase):
+    """メモのフォルダの中の外へのリンク."""
+
+    def test_wildcard_with_trailing_slash_is_denied(self):
+        self.make_memory_escape()
+        m = self.m
+        self.assertBashDenied([f"rm -rf {m}/*/", f"rm -rf {m}/esc*/", f"rm -rf {m}/sub/*/"])
+
+    def test_without_trailing_slash_is_allowed(self):
+        self.make_memory_escape()
+        self.assertBashAllowed([f"rm {self.m}/*"])
+
+    def test_no_link_is_allowed(self):
+        self.assertBashAllowed([f"rm -rf {self.m}/sub/"])
+
+
+class TestRestrictPushdMinus(Issue59SandboxMixin, unittest.TestCase):
+    """pushd - / Push-Location - は同じコマンド内で追跡できる場合だけ解決する（cwd はリポジトリ外で x が既存）."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.x = self.touch(self.out, "x")
+
+    def test_bash_returns_to_outside_is_denied(self):
+        s = f"{self.r}/sub"
+        self.assertBashDenied([f"cd {s} && pushd - && rm x", f"cd {s}; pushd -; rm x",
+                               f"bash -c 'cd {s} && pushd - && rm x'"], cwd=self.out)
+
+    def test_powershell_returns_to_outside_is_denied(self):
+        s = f"{self.r}/sub"
+        self.assertPsDenied([f"Set-Location {s}; Push-Location -; Remove-Item x",
+                             f"Push-Location {s}; Set-Location -; Remove-Item x"], cwd=self.out)
+
+    def test_popd_returns_to_repo_is_allowed(self):
+        self.assertBashAllowed([f"cd {self.r}/sub && pushd - && popd && rm x"], cwd=self.out)
+
+    def test_popd_location_is_tracked(self):
+        """popd の戻り先が未解決に落ちていないこと（未解決だと上の許可のテストも通ってしまう）."""
+        self.assertBashDenied([f"cd {self.r}/sub && pushd - && popd && rm ../../outside/x"], cwd=self.out)
+
+    def test_untrackable_stays_unresolved(self):
+        """コマンドより前の移動先は分からないので，従来どおり未解決（判定しない）."""
+        self.assertBashAllowed(["pushd - && rm x"], cwd=self.out)
+        self.assertPsAllowed(["Push-Location -; Remove-Item x"], cwd=self.out)
 
 
 if __name__ == "__main__":

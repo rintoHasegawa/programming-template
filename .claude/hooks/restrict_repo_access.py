@@ -38,8 +38,18 @@
   メモ，transcript_path が無い・絶対パスでない場合は許可しない．
   実際の対象を文字列から確定できないパス（波括弧・`..` を含む，途中の階層にワイルドカードを
   含む，コマンド内の cd 等の移動先がそれらやワイルドカードを含む）も許可しない．最後の要素
-  だけのワイルドカード（memory/*・memory/*.md）は許可する（一致したリンク自体は判定できない）．
+  だけのワイルドカード（memory/*・memory/*.md）は許可する（rm 等が一致したリンク自体を消すだけの
+  場合はリンク先を判定しない．Bash で末尾に / があるとリンク先の中身が消えるので，その場合は判定する）．
   transcript_path の親の階層に [ や { があると，メモのフォルダの許可は効かない（安全側の制限）
+
+パスの展開と解決（削除・上書き・作成の対象について）:
+- 波括弧は Bash 系の方言でだけ展開して，元の文字列のままの判定に加えて展開後の各パスも判定する
+  （PowerShell・cmd.exe は波括弧を展開しない）．展開数が上限を超えた語が削除・上書きの対象なら拒否する
+- ワイルドカードはフック実行時に実際に展開して，一致した各パスも判定する（Bash・PowerShell．
+  一致が無ければ文字列のままの判定だけ）
+- `..` は文字列の正規化に加え，OS と同じ順に要素をたどる解決（リンク・ジャンクションを解決してから
+  親に上がる）でも判定する．どちらかでリポジトリ外や既存ファイルに当たれば拒否・上書き扱いにする
+- cd - / pushd - / Set-Location - / + / Push-Location - / + は，同じコマンド内で追跡できる場合だけ移動先を解決する
 
 限界（重要）:
   本フックはコマンド文字列の静的解析であり，原理的に完全には防げない．変数展開
@@ -48,6 +58,14 @@
   コマンド，未対応のコマンドによる削除・上書き，インライン実行中の未対応の書き方
   （変数に入れたパス・Perl の open 等）は検出できない．存在判定はフック実行時点の
   ものであり，同じコマンド内で先に作ったファイルを上書きする場合等は許可される．
+  トークナイザーがクォートの情報を落とすため，クォート内の波括弧・ワイルドカードも展開して
+  判定する（安全側）．`**` は 1 階層のワイルドカードとして扱う（globstar の再帰は追わない）．
+  ワイルドカードの一致が多すぎると残りは調べず，基点がリポジトリ内・一時ディレクトリならそのまま
+  許可，それ以外は拒否する．読み取り（禁止リスト）の判定はワイルドカードを展開しない．
+  cmd.exe のコマンド・インライン実行のコードは波括弧・ワイルドカード・リンクの展開の対象外．
+  Windows PowerShell 5.1 は Set-Location - / Push-Location - を受け付けず元の場所に留まるが，追跡は 7 系の挙動に合わせる．
+  Linux の /tmp 配下のリンク越しのパス（/tmp の文字列判定で許可される），pushd -n <dir>（実際には移動しないが
+  移動として扱う），サブシェル内の pushd / popd（スタックを復元しない）は，実際の対象とずれることがある．
   逆にインライン実行は，削除系の呼び出しとリポジトリ外のパス（文字列・コメント中の
   ものも含む）が同時に現れると，削除対象でなくても拒否することがある．
   cmd.exe の引数のうち /opt のように / の後に要素が 1 つだけのパスは，スイッチ
@@ -59,10 +77,12 @@
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import posixpath
 import re
+import stat
 import sys
 import tempfile
 
@@ -101,6 +121,18 @@ WINDOWS_SPECIAL_NAMES = {"nul", "con", "$null", "nul:", "con:"}
 DELETE = "delete"
 OVERWRITE = "overwrite"
 CREATE = "create"
+# ワイルドカードの一致が多すぎて全部は調べられなかった．基点が許可ゾーンでなければ拒否する
+UNDECIDABLE = "undecidable"
+
+# 波括弧の展開の上限（1 語あたりの展開数・語の長さ・ネストの深さ）．超えた語が削除・上書きの対象なら拒否する
+MAX_BRACE_EXPANSIONS = 256
+MAX_BRACE_WORD_LENGTH = 4096
+MAX_BRACE_DEPTH = 32
+# ワイルドカードの展開の上限（1 パスあたりの一致数・1 コマンドあたりの調べるディレクトリエントリ数）．
+# フックの実行時間を抑えるため（タイムアウトすると検査が効かない）
+MAX_WILDCARD_MATCHES = 1000
+MAX_WILDCARD_SCANS = 10000
+_wildcard_scans_left = [MAX_WILDCARD_SCANS]
 
 # ---------------------------------------------------------------------------
 # Bash: コマンドの分類
@@ -265,6 +297,9 @@ def is_temp_path(path: str) -> bool:
     normalized = posixpath.normpath(path.replace("\\", "/"))
     if normalized == "/tmp" or normalized.startswith("/tmp/"):
         return True
+    # macOS の /tmp は /private/tmp へのリンクなので，要素をたどって解決したパスも /tmp として扱う
+    if os.name != "nt" and is_within_directory(path, "/tmp"):
+        return True
     return is_within_directory(path, tempfile.gettempdir())
 
 
@@ -333,6 +368,14 @@ def resolve_path(token: str, cwd: str | None, dialect: str = "bash") -> str | No
     特殊デバイスは SPECIAL，解決できない（未知の変数を含む・cwd 不明で相対）ものは
     UNKNOWN（None）を返す．
     """
+    joined = absolute_unnormalized(token, cwd, dialect)
+    if joined in (UNKNOWN, SPECIAL):
+        return joined
+    return os.path.normpath(joined)
+
+
+def absolute_unnormalized(token: str, cwd: str | None, dialect: str = "bash") -> str | None:
+    """resolve_path の手前まで（`..` を畳まない絶対パス）を返す．戻り値の扱いは resolve_path と同じ."""
     if not token:
         return UNKNOWN
     if dialect == "powershell":
@@ -358,7 +401,7 @@ def resolve_path(token: str, cwd: str | None, dialect: str = "bash") -> str | No
         if cwd is None:
             return UNKNOWN
         token = os.path.join(cwd, token)
-    return os.path.normpath(token)
+    return token
 
 
 def is_ambiguous_for_memory(path: str) -> bool:
@@ -372,6 +415,267 @@ def is_ambiguous_for_memory(path: str) -> bool:
         return True
     parts = re.split(r"[/\\]", path)
     return ".." in parts or any(re.search(r"[*?\[]", part) for part in parts[:-1])
+
+
+# ---------------------------------------------------------------------------
+# 波括弧の展開（Bash 系の方言のみ）
+# ---------------------------------------------------------------------------
+class BraceLimitExceeded(Exception):
+    """波括弧の展開が上限を超えた."""
+
+
+BRACE_INT_SEQUENCE = re.compile(r"^(-?\d+)\.\.(-?\d+)(?:\.\.(-?\d+))?$")
+BRACE_CHAR_SEQUENCE = re.compile(r"^([A-Za-z])\.\.([A-Za-z])(?:\.\.(-?\d+))?$")
+BRACE_ZERO_PADDED = re.compile(r"^-?0\d")
+
+
+def expand_brace_sequence(body: str) -> list | None:
+    """{1..3}・{a..e}・{01..10..2} の中身を展開する．順序式でなければ None を返す."""
+    m = BRACE_INT_SEQUENCE.match(body)
+    if m:
+        start, end = int(m.group(1)), int(m.group(2))
+        padded = BRACE_ZERO_PADDED.match(m.group(1)) or BRACE_ZERO_PADDED.match(m.group(2))
+        width = max(len(m.group(1)), len(m.group(2))) if padded else 0
+    else:
+        m = BRACE_CHAR_SEQUENCE.match(body)
+        if not m:
+            return None
+        start, end = ord(m.group(1)), ord(m.group(2))
+        width = None
+    step = abs(int(m.group(3))) if m.group(3) else 1
+    step = step or 1
+    if abs(end - start) // step + 1 > MAX_BRACE_EXPANSIONS:
+        raise BraceLimitExceeded()
+    numbers = range(start, end + 1, step) if start <= end else range(start, end - 1, -step)
+    if width is None:
+        return [chr(n) for n in numbers]
+    return ["%0*d" % (width, n) for n in numbers]
+
+
+def split_brace_body(word: str, start: int) -> tuple | None:
+    """word[start] の `{` に対応する `}` を探し，(閉じ位置, トップレベルのコンマの位置のリスト) を返す."""
+    depth = 0
+    commas: list = []
+    for i in range(start, len(word)):
+        c = word[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i, commas
+        elif c == "," and depth == 1:
+            commas.append(i)
+    return None
+
+
+def expand_brace_recursive(word: str, depth: int) -> list:
+    if depth > MAX_BRACE_DEPTH:
+        raise BraceLimitExceeded()
+    i = 0
+    while i < len(word):
+        if word[i] != "{":
+            i += 1
+            continue
+        found = split_brace_body(word, i)
+        if i > 0 and word[i - 1] == "$":  # ${VAR} は波括弧の展開ではない
+            if found is None:
+                return [word]
+            i = found[0] + 1
+            continue
+        if found is None:
+            i += 1  # 閉じていない `{` は文字どおり（後ろに別の組があれば Bash はそれを展開する）
+            continue
+        end, commas = found
+        if commas:
+            bounds = [i] + commas + [end]
+            alternatives: list = []
+            for left, right in zip(bounds, bounds[1:]):
+                alternatives += expand_brace_recursive(word[left + 1:right], depth + 1)
+                if len(alternatives) > MAX_BRACE_EXPANSIONS:
+                    raise BraceLimitExceeded()
+        else:
+            alternatives = expand_brace_sequence(word[i + 1:end])
+            if alternatives is None:
+                i += 1  # {a} や {} は文字どおり（内側の {{a,b}} は続きの走査で展開される）
+                continue
+        rest = expand_brace_recursive(word[end + 1:], depth + 1)
+        if len(alternatives) * len(rest) > MAX_BRACE_EXPANSIONS:
+            raise BraceLimitExceeded()
+        return [word[:i] + a + r for a in alternatives for r in rest]
+    return [word]
+
+
+def expand_braces(word: str) -> list | None:
+    """Bash の波括弧展開の結果を返す．展開しない語は [word]，上限を超えた・解釈に失敗した語は None."""
+    if "{" not in word:
+        return [word]
+    if len(word) > MAX_BRACE_WORD_LENGTH:
+        return None
+    try:
+        return expand_brace_recursive(word, 0)
+    except Exception:  # 上限超過・想定外の失敗はどちらも「展開できなかった」として安全側で扱う
+        return None
+
+
+def raw_comes_from_word(raw: str, word: str) -> bool:
+    """エントリの文字列 raw が語 word（of=x・--output=x・-ox の形を含む）に由来するかを判定する."""
+    if not raw:
+        return False
+    return raw == word or word.endswith("=" + raw) or (word.startswith("-") and word.endswith(raw))
+
+
+# ---------------------------------------------------------------------------
+# OS と同じ順に要素をたどる解決（リンクの後の `..`・ワイルドカード）
+# ---------------------------------------------------------------------------
+# 一致したリンク自体を消すだけのコマンド（リンク先の中身には触らない）．
+# truncate・shred・Clear-Content はリンク先の中身を壊すので含めない
+REMOVES_LINK_ITSELF = (
+    (BASH_DELETE - {"truncate", "shred", "srm"}) | {"mv"} | PS_MOVE | PS_RENAME
+    | (PS_DELETE - {"clear-content", "clc", "clear-item", "cli"})
+)
+
+
+def has_wildcard(text: str) -> bool:
+    return re.search(r"[*?\[]", text) is not None
+
+
+def is_link_or_junction(path: str) -> bool:
+    """path がシンボリックリンク・ジャンクションかを判定する（Python 3.7 でも使える書き方）."""
+    try:
+        st = os.lstat(path)
+    except (OSError, ValueError):
+        return False
+    if stat.S_ISLNK(st.st_mode):
+        return True
+    return bool(getattr(st, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+
+
+def split_path_elements(path: str) -> tuple:
+    """絶対パスを (起点, 要素のリスト) に分ける."""
+    drive, rest = os.path.splitdrive(path)
+    separators = r"[/\\]" if os.name == "nt" else "/"
+    anchor = drive + os.sep if re.match(separators, rest) else drive
+    return anchor, [part for part in re.split(separators, rest) if part not in ("", ".")]
+
+
+def wildcard_matches(directory: str, pattern: str) -> tuple:
+    """directory 直下で pattern に一致する名前を (名前のリスト, 打ち切ったか) で返す.
+
+    ドットで始まる名前も一致させる（PowerShell は一致する．Bash では dotglob の場合だけなので安全側）．
+    """
+    names: list = []
+    try:
+        with os.scandir(directory) as it:
+            for entry in it:
+                if _wildcard_scans_left[0] <= 0 or len(names) >= MAX_WILDCARD_MATCHES:
+                    return names, True
+                _wildcard_scans_left[0] -= 1
+                if fnmatch.fnmatch(entry.name, pattern):
+                    names.append(entry.name)
+    except OSError:
+        pass
+    return names, False
+
+
+def walk_path(path: str, wildcards: bool, skip_final_links: bool) -> tuple:
+    """OS と同じ順に要素をたどって実際の対象を求め，(パスのリスト, 打ち切ったか) を返す.
+
+    途中のリンク・ジャンクションは解決してから次の要素へ進むので，`..` はリンク先の親へ上がる．
+    最後の要素のリンクは解決しない（判定側で見る）．存在しない要素は文字どおりに進める．
+    要素と同じ名前のものが実在するときはワイルドカードとして扱わない（親の階層の `[x]` 等）．
+    ワイルドカードを含むパスは，最後まで実在するものだけを一致とする．
+    """
+    anchor, elements = split_path_elements(path)
+    current = [anchor]
+    truncated = False
+    expanded = False
+    for index, element in enumerate(elements):
+        is_last = index == len(elements) - 1
+        following: list = []
+        for base in current:
+            if element == "..":
+                following.append(os.path.dirname(base) or base)
+                continue
+            names = [element]
+            wild = wildcards and has_wildcard(element) and not os.path.lexists(os.path.join(base, element))
+            if wild:
+                expanded = True
+                names, cut = wildcard_matches(base, element)
+                truncated = truncated or cut
+            for name in names:
+                candidate = os.path.join(base, name)
+                if is_link_or_junction(candidate):
+                    if is_last and wild and skip_final_links:
+                        continue
+                    if not is_last:
+                        candidate = os.path.realpath(candidate)
+                following.append(candidate)
+        current = list(dict.fromkeys(following))
+        if len(current) > MAX_WILDCARD_MATCHES:
+            current = current[:MAX_WILDCARD_MATCHES]
+            truncated = True
+    if expanded:
+        current = [p for p in current if os.path.lexists(p)]
+    return current, truncated
+
+
+def reaches_link_target_by_trailing_separator(raw: str, dialect: str) -> bool:
+    """raw の末尾の区切りで，一致したリンクの先までたどられるかを判定する.
+
+    Bash の rm -rf `*/` はリンク自体を残してリンク先の中身を消す（Git Bash・WSL で実測）．
+    PowerShell の Remove-Item `*/` は末尾の区切りがあってもリンク自体を消すだけなので対象にしない
+    （Windows の 5.1・7.6 で実測）．`\\` が区切りになるのは Windows だけ．
+    """
+    if dialect == "powershell":
+        return False
+    return raw.endswith(("/", "\\") if os.name == "nt" else "/")
+
+
+def walked_targets(raw: str, cwd: str | None, dialect: str, wildcards: bool = True,
+                   skip_final_links: bool = False) -> tuple:
+    """raw の実際の対象を (パスのリスト, 打ち切ったか) で返す．`..` もワイルドカードも無ければ空.
+
+    OS と同じ順にたどる解決に加え，`..` を文字列で畳んだ形（Windows の PowerShell の解決）のワイルドカードも
+    展開する．想定外の失敗は例外を外へ漏らさず「打ち切った」として返す（基点が許可ゾーンでなければ拒否される）．
+    """
+    try:
+        joined = absolute_unnormalized(raw, cwd, dialect)
+        if joined in (UNKNOWN, SPECIAL):
+            return [], False
+        follow_final_links = skip_final_links and reaches_link_target_by_trailing_separator(raw, dialect)
+        if follow_final_links:
+            skip_final_links = False
+        elements = split_path_elements(joined)[1]
+        has_parent = ".." in elements
+        wild = wildcards and any(has_wildcard(e) for e in elements)
+        if not (has_parent or wild or follow_final_links):
+            return [], False
+        found, truncated = walk_path(joined, wildcards, skip_final_links)
+        if has_parent and wild:
+            more, cut = walk_path(os.path.normpath(joined), wildcards, skip_final_links)
+            found = list(dict.fromkeys(found + more))
+            truncated = truncated or cut
+        if follow_final_links:
+            # 実際に消えるのはリンク先の中身なので，その実パスも判定する．リンク自体のパスのままだと，
+            # /tmp の文字列判定（is_temp_path）で一時ディレクトリの中と見なされ素通りする（Linux で確認）
+            found += [os.path.realpath(path) for path in found if is_link_or_junction(path)]
+        return found, truncated
+    except Exception:
+        return [], True
+
+
+def path_entries(name: str, raw: str, cwd: str | None, dialect: str, kind: str, wildcards: bool = True) -> list:
+    """raw の判定エントリを作る．文字列のままの解決に，実際にたどった結果のパスを加える."""
+    resolved = resolve_path(raw, cwd, dialect)
+    result = [(name, raw, resolved, kind)]
+    if resolved in (UNKNOWN, SPECIAL):
+        return result
+    found, truncated = walked_targets(raw, cwd, dialect, wildcards, name in REMOVES_LINK_ITSELF)
+    result += [(name, raw, path, kind) for path in found if path != resolved]
+    if truncated and kind != CREATE:
+        result.append((name, raw, glob_base(resolved), UNDECIDABLE))
+    return result
 
 
 def looks_absolute(text: str) -> bool:
@@ -747,6 +1051,7 @@ class Findings:
         self.inline: list = []  # (コマンド名, リテラル, 解決済みパス, 操作種別)
         # cd 等の移動先を文字列から確定できなかった（追跡中の cwd からはメモの配下と言えない）
         self.ambiguous_cd = False
+        self.unexpandable: list = []  # (コマンド名, 元の文字列) 波括弧を展開できなかった削除・上書きの対象
 
     def note_location_change(self, dest: str) -> None:
         """cd 等の移動先を記録する．移動先は最後の要素のワイルドカードも確定できない."""
@@ -942,15 +1247,26 @@ def copy_dest_entries(name: str, dest_raw: str, srcs: list, cwd: str | None, dia
     dest = resolve_path(dest_raw, cwd, dialect)
     if dest in (UNKNOWN, SPECIAL):
         return []
-    if not (into_dir or os.path.isdir(dest)):
-        return [(name, dest_raw, dest, OVERWRITE)]
-    entries = []
+    walked_dests, truncated = walked_targets(dest_raw, cwd, dialect)
+    bases: list = []
     for src in srcs:
         if contents_on_slash and src.endswith(("/", "\\")):
             continue
         base = posixpath.basename(src.replace("\\", "/").rstrip("/").split("?")[0])
         if base and base not in (".", "..") and "$" not in base:
-            entries.append((name, dest_raw, os.path.join(dest, base), OVERWRITE))
+            bases.append(base)
+            if has_wildcard(base):  # コピー元のワイルドカードは，一致した各ファイルの名前で書き込まれる
+                matched, cut = walked_targets(src, cwd, dialect)
+                bases += [os.path.basename(path) for path in matched]
+                truncated = truncated or cut
+    entries = []
+    for target in [dest] + [path for path in walked_dests if path != dest]:
+        if into_dir or os.path.isdir(target):
+            entries += [(name, dest_raw, os.path.join(target, base), OVERWRITE) for base in bases]
+        else:
+            entries.append((name, dest_raw, target, OVERWRITE))
+    if truncated:
+        entries.append((name, dest_raw, glob_base(dest), UNDECIDABLE))
     return entries
 
 
@@ -971,7 +1287,7 @@ def write_targets_bash(cmd: str, args: list, cwd: str | None, dialect: str = "ba
     """Bash の単純コマンドから削除・上書き・作成の対象を (名前, 文字列, 解決済みパス, 種別) で取り出す."""
 
     def entries(raws: list, kind: str) -> list:
-        return [(cmd, r, resolve_path(r, cwd, dialect), kind) for r in raws]
+        return [e for r in raws for e in path_entries(cmd, r, cwd, dialect, kind)]
 
     if cmd in BASH_DELETE:
         positional, _ = split_option_args(cmd, args)
@@ -1081,6 +1397,13 @@ def find_targets(args: list) -> list:
     return starts or ["."]
 
 
+def record_bash_arg_reads(cmd: str, arg: str, cwd: str | None, findings: Findings) -> None:
+    """Bash の引数 arg（--x=y・of=y の y も）を読み取り（禁止リスト判定用）として記録する."""
+    for candidate in (arg, arg.split("=", 1)[1] if "=" in arg else None):
+        if candidate:
+            findings.reads.append((cmd, candidate, resolve_path(candidate, cwd), cmd in RECURSIVE_READ_COMMANDS))
+
+
 def analyze_bash(command: str, cwd: str | None, findings: Findings, depth: int = 0) -> None:
     """Bash コマンドを解析して findings に書き込み・読み取りを追加する."""
     if depth > 3:
@@ -1088,13 +1411,14 @@ def analyze_bash(command: str, cwd: str | None, findings: Findings, depth: int =
     tokens = tokenize_bash(command)
     dir_stack: list = []
     subshell_stack: list = []
+    previous_cwd = UNKNOWN  # cd - / pushd - の移動先（コマンド開始時点の OLDPWD は分からない）
     for segment in split_segments(tokens):
         if segment == "open":
-            subshell_stack.append(cwd)
+            subshell_stack.append((cwd, previous_cwd))
             continue
         if segment == "close":
             if subshell_stack:
-                cwd = subshell_stack.pop()
+                cwd, previous_cwd = subshell_stack.pop()
             continue
         words: list = []
         heredoc_bodies: list = []
@@ -1114,13 +1438,19 @@ def analyze_bash(command: str, cwd: str | None, findings: Findings, depth: int =
                     continue
                 if text in (">&", "<&") and (target.isdigit() or target == "-"):
                     continue  # ファイルディスクリプタの複製
-                resolved = resolve_path(target, cwd)
+                expansions = expand_braces(target)
+                variants = [target] + [v for v in (expansions or []) if v != target]
                 if text == "<":
-                    findings.reads.append(("<", target, resolved, False))
+                    findings.reads += [("<", target, resolve_path(v, cwd), False) for v in variants]
                 else:
                     # >> / &>> は追記，<> は切り詰めずに開くので新規作成扱い．> / >| / &> は上書き
                     op_kind = CREATE if text in (">>", "&>>", "<>") else OVERWRITE
-                    findings.writes.append((text, target, resolved, op_kind))
+                    if expansions is None and op_kind != CREATE:
+                        findings.unexpandable.append((text, target))
+                    for variant in variants:
+                        # 元の文字列を残す（波括弧を含むパスはメモのフォルダで許可しないため）
+                        findings.writes += [(text, target, e[2], e[3])
+                                            for e in path_entries(text, variant, cwd, "bash", op_kind)]
                 continue
             if kind == "heredoc":
                 if text:
@@ -1137,20 +1467,20 @@ def analyze_bash(command: str, cwd: str | None, findings: Findings, depth: int =
 
         # 引数はすべて読み取り（禁止リスト判定用）として記録する
         for a in args:
-            for candidate in (a, a.split("=", 1)[1] if "=" in a else None):
-                if candidate:
-                    findings.reads.append((cmd, candidate, resolve_path(candidate, cwd), cmd in RECURSIVE_READ_COMMANDS))
+            record_bash_arg_reads(cmd, a, cwd, findings)
 
         # cd / pushd / popd の追跡
         if cmd in ("cd", "pushd", "popd"):
             if cmd == "popd":
+                previous_cwd = cwd
                 cwd = dir_stack.pop() if dir_stack else UNKNOWN
                 continue
             dest = [a for a in args if not (a.startswith("-") and a != "-")]
             if not dest:
                 new_cwd = home_dir()
             elif dest[0] == "-":
-                new_cwd = UNKNOWN
+                # pushd - は cd - と同じ場所へ移動する．pushd -n はディレクトリを移動しないので追跡しない
+                new_cwd = previous_cwd if cmd == "cd" or "-n" not in args else UNKNOWN
             else:
                 findings.note_location_change(dest[0])
                 new_cwd = resolve_path(dest[0], cwd)
@@ -1158,12 +1488,53 @@ def analyze_bash(command: str, cwd: str | None, findings: Findings, depth: int =
                     new_cwd = UNKNOWN
             if cmd == "pushd":
                 dir_stack.append(cwd)
+            previous_cwd = cwd
             cwd = new_cwd
             continue
 
-        findings.writes += write_targets_bash(cmd, args, cwd)
+        literal_entries = write_targets_bash(cmd, args, cwd)
+        findings.writes += literal_entries
+        collect_brace_expansions(words, cmd, literal_entries, cwd, findings)
 
         analyze_inline(cmd, args, heredoc_bodies + herestrings, cwd, findings, depth, "bash")
+
+
+def collect_brace_expansions(words: list, cmd: str, literal_entries: list, cwd: str | None, findings: Findings) -> None:
+    """単純コマンドの語を波括弧展開した場合の削除・上書きの対象と読み取りを追加する.
+
+    元の語のままの判定（literal_entries）は残す．クォートされた波括弧は展開されないが，トークナイザーが
+    クォートの情報を落とすので両方を見る．展開後のエントリの文字列は元の語に戻す（`{` を含むパスは
+    メモのフォルダで許可しないため）．インライン実行のコードは呼び出し側が展開前の語で解析する．
+    """
+    expanded_words: list = []
+    sources: dict = {}  # 展開後の語 → 元の語
+    destructive = [e for e in literal_entries if e[3] != CREATE]
+    for word in words:
+        expansions = expand_braces(word)
+        if expansions is None:
+            # 判定の対象になる語だけを拒否する（echo '<長い JSON>' > file の JSON 等は対象にしない）．
+            # コピー元の語はエントリの文字列に現れないので，コピー系は引数であれば対象とみなす
+            if any(raw_comes_from_word(e[1], word) for e in destructive) or (cmd in BASH_COPY and destructive):
+                findings.unexpandable.append((cmd, word))
+            expanded_words.append(word)
+            continue
+        expanded_words += expansions
+        if expansions != [word]:
+            for expanded in expansions:
+                sources[expanded] = word
+    if not sources:
+        return
+    argv = strip_bash_prefixes(expanded_words)
+    if not argv:
+        return
+    expanded_cmd = command_basename(argv[0])
+    expanded_args = argv[1:]
+    for a in expanded_args:
+        if a in sources:
+            record_bash_arg_reads(expanded_cmd, a, cwd, findings)
+    for name, raw, resolved, kind in write_targets_bash(expanded_cmd, expanded_args, cwd):
+        origin = next((word for expanded, word in sources.items() if raw_comes_from_word(raw, expanded)), raw)
+        findings.writes.append((name, origin, resolved, kind))
 
 
 def analyze_inline(cmd: str, args: list, stdin_codes: list, cwd: str | None, findings: Findings,
@@ -1251,7 +1622,7 @@ def write_targets_ps(cmd: str, args: list, cwd: str | None) -> list:
     positional, named = parse_ps_args(args)
 
     def entries(raws: list, kind: str) -> list:
-        return [(cmd, r, resolve_path(r, cwd, "powershell"), kind) for r in raws]
+        return [e for r in raws for e in path_entries(cmd, r, cwd, "powershell", kind)]
 
     def targets(first_only: bool) -> list:
         result = positional[:1] if first_only else list(positional)
@@ -1319,6 +1690,9 @@ def analyze_powershell(command: str, cwd: str | None, findings: Findings, depth:
     collect_dotnet_calls(command, cwd, findings)
     tokens = tokenize_powershell(command)
     dir_stack: list = []
+    # Set-Location - / + と Push-Location - / + の履歴（コマンド開始より前の履歴は分からない）
+    location_back: list = []
+    location_forward: list = []
     for segment in split_segments(tokens):
         if segment in ("open", "close"):
             continue
@@ -1335,7 +1709,7 @@ def analyze_powershell(command: str, cwd: str | None, findings: Findings, depth:
                     findings.reads.append(("<", target, resolve_path(target, cwd, "powershell"), False))
                 else:
                     op_kind = CREATE if text == ">>" else OVERWRITE
-                    findings.writes.append((text, target, resolve_path(target, cwd, "powershell"), op_kind))
+                    findings.writes += path_entries(text, target, cwd, "powershell", op_kind)
                 continue
             words.append(text)
             idx += 1
@@ -1350,19 +1724,31 @@ def analyze_powershell(command: str, cwd: str | None, findings: Findings, depth:
             findings.reads.append((cmd, value, resolve_path(value, cwd, "powershell"), recursive))
 
         if cmd in PS_LOCATION_SET or cmd in PS_LOCATION_PUSH or cmd in PS_LOCATION_POP:
+            # Push-Location / Pop-Location も Set-Location と同じ履歴を更新する（PowerShell 7.6 で実測）
             if cmd in PS_LOCATION_POP:
-                cwd = dir_stack.pop() if dir_stack else UNKNOWN
+                if dir_stack:
+                    location_back.append(cwd)
+                    location_forward = []
+                    cwd = dir_stack.pop()
+                else:  # コマンド開始より前のスタックは分からないので，移動先も以降の - / + も未解決にする
+                    location_back, location_forward = [], []
+                    cwd = UNKNOWN
                 continue
             dest = named.get("path", []) + named.get("literalpath", []) + positional
-            if not dest:
-                new_cwd = home_dir() if cmd in PS_LOCATION_SET else cwd
-            elif dest[0] in ("-", "+"):
-                new_cwd = UNKNOWN
+            if dest and dest[0] in ("-", "+"):
+                source, other = (location_back, location_forward) if dest[0] == "-" else (location_forward, location_back)
+                new_cwd = source.pop() if source else UNKNOWN
+                other.append(cwd)
             else:
-                findings.note_location_change(dest[0])
-                new_cwd = resolve_path(dest[0], cwd, "powershell")
-                if new_cwd == SPECIAL:
-                    new_cwd = UNKNOWN
+                if not dest:
+                    new_cwd = home_dir() if cmd in PS_LOCATION_SET else cwd
+                else:
+                    findings.note_location_change(dest[0])
+                    new_cwd = resolve_path(dest[0], cwd, "powershell")
+                    if new_cwd == SPECIAL:
+                        new_cwd = UNKNOWN
+                location_back.append(cwd)
+                location_forward = []
             if cmd in PS_LOCATION_PUSH:
                 dir_stack.append(cwd)
             cwd = new_cwd
@@ -1381,6 +1767,8 @@ def destructive_reason(kind: str, raw: str, resolved: str, policy: Policy) -> st
         return None
     if kind == DELETE:
         return "ファイルの削除（移動を含む）"
+    if kind == UNDECIDABLE:
+        return "削除・上書き（ワイルドカードの一致が多すぎて対象を確定できません）"
     if os.path.lexists(resolved):
         return "既存ファイルの上書き"
     return None  # 存在しないパスへの書き込みは新規作成なので許可する
@@ -1390,6 +1778,13 @@ def evaluate_findings(findings: Findings, policy: Policy) -> str | None:
     """解析結果を判定し，拒否する場合は理由文字列を返す."""
     if findings.ambiguous_cd:
         policy = Policy(policy.repo_root, policy.deny_read)  # メモのフォルダの許可だけを外す
+    if findings.unexpandable:
+        name, raw = findings.unexpandable[0]
+        return (
+            f"波括弧の展開数が多すぎて対象を確定できないため，リポジトリ外を指しうる削除・上書きとして"
+            f"ブロックしました: `{name}` が `{raw[:200]}` を対象としています．対象を分けて指定してください．"
+            f"{WRITE_DENY_GUIDANCE}"
+        )
     for name, raw, resolved, kind in findings.writes:
         if resolved in (UNKNOWN, SPECIAL):
             continue
@@ -1428,6 +1823,7 @@ def evaluate_findings(findings: Findings, policy: Policy) -> str | None:
 
 def check_shell_command(analyzer, command: str, cwd: str, policy: Policy) -> str | None:
     """コマンドを analyzer（analyze_bash / analyze_powershell）で解析して判定する."""
+    _wildcard_scans_left[0] = MAX_WILDCARD_SCANS
     findings = Findings()
     analyzer(command, cwd, findings)
     return evaluate_findings(findings, policy)
@@ -1472,17 +1868,18 @@ def check_file_tool(tool_name: str, tool_input: dict, cwd: str, policy: Policy) 
     for raw in paths:
         if not isinstance(raw, str) or not raw:
             continue
-        resolved = resolve_path(raw, cwd)
-        if resolved in (UNKNOWN, SPECIAL):
-            continue
-        entry = policy.denied_entry(resolved)
-        if entry is None and tool_name in ("Glob", "Grep"):
-            entry = policy.contained_denied_entry(resolved)
-        if entry:
-            return deny_read_message(raw, entry)
-        if destructive_reason(kind, raw, resolved, policy):
-            action = "既存ファイルの上書き" if kind == OVERWRITE else "既存ファイルの書き換え"
-            return f"リポジトリ外の{action}をブロックしました: {raw}．{WRITE_DENY_GUIDANCE}"
+        # ファイル操作ツールはワイルドカードを展開しない（文字どおりの名前）．`..` だけ要素をたどって解決する
+        for _, _, resolved, entry_kind in path_entries(tool_name, raw, cwd, "bash", kind, wildcards=False):
+            if resolved in (UNKNOWN, SPECIAL):
+                continue
+            entry = policy.denied_entry(resolved)
+            if entry is None and tool_name in ("Glob", "Grep"):
+                entry = policy.contained_denied_entry(resolved)
+            if entry:
+                return deny_read_message(raw, entry)
+            if destructive_reason(entry_kind, raw, resolved, policy):
+                action = "既存ファイルの上書き" if kind == OVERWRITE else "既存ファイルの書き換え"
+                return f"リポジトリ外の{action}をブロックしました: {raw}．{WRITE_DENY_GUIDANCE}"
     return None
 
 
