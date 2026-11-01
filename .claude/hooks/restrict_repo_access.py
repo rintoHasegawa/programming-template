@@ -32,6 +32,14 @@
   （/sync-template・/set-mode がテンプレートを mktemp -d に clone して cp・rm -rf
    するため．一時ディレクトリは使い捨て領域であり，許可しても失うものがない）
 - /dev/null・NUL・$null 等の特殊デバイス
+- 今のプロジェクトの Claude メモのフォルダの配下（フック入力の transcript_path の親
+  フォルダ直下の memory の中．メモの更新・修正・削除は Claude の通常の作業のため）．
+  memory フォルダ自体の削除・移動，memory がシンボリックリンクの場合，他のプロジェクトの
+  メモ，transcript_path が無い・絶対パスでない場合は許可しない．
+  実際の対象を文字列から確定できないパス（波括弧・`..` を含む，途中の階層にワイルドカードを
+  含む，コマンド内の cd 等の移動先がそれらやワイルドカードを含む）も許可しない．最後の要素
+  だけのワイルドカード（memory/*・memory/*.md）は許可する（一致したリンク自体は判定できない）．
+  transcript_path の親の階層に [ や { があると，メモのフォルダの許可は効かない（安全側の制限）
 
 限界（重要）:
   本フックはコマンド文字列の静的解析であり，原理的に完全には防げない．変数展開
@@ -353,6 +361,19 @@ def resolve_path(token: str, cwd: str | None, dialect: str = "bash") -> str | No
     return os.path.normpath(token)
 
 
+def is_ambiguous_for_memory(path: str) -> bool:
+    """メモのフォルダの配下と文字列から確定できないパスかを判定する.
+
+    波括弧はシェルが展開すると `..` で外に出ることがあり，`..` は途中のリンクの先の親として
+    OS が解決し（memory/link/../x），途中の階層のワイルドカードはリンクに一致しうる．
+    いずれも normpath の結果からは分からない．最後の要素だけのワイルドカードは対象にしない．
+    """
+    if "{" in path or "}" in path:
+        return True
+    parts = re.split(r"[/\\]", path)
+    return ".." in parts or any(re.search(r"[*?\[]", part) for part in parts[:-1])
+
+
 def looks_absolute(text: str) -> bool:
     """コード文字列中のリテラルがリポジトリ外を指しうるパスに見えるかを判定する."""
     return bool(
@@ -364,9 +385,10 @@ def looks_absolute(text: str) -> bool:
 # 判定コンテキスト
 # ---------------------------------------------------------------------------
 class Policy:
-    def __init__(self, repo_root: str, deny_read: list) -> None:
+    def __init__(self, repo_root: str, deny_read: list, transcript_path: str | None = None) -> None:
         self.repo_root = repo_root
         self.deny_read = deny_read
+        self.transcript_path = transcript_path
 
     def denied_entry(self, path: str) -> str | None:
         """path が禁止リストのいずれかの配下なら，その禁止エントリを返す."""
@@ -387,8 +409,30 @@ class Policy:
     def is_inside_repo(self, path: str) -> bool:
         return is_within_directory(path, self.repo_root)
 
-    def is_write_allowed(self, path: str) -> bool:
-        return self.is_inside_repo(path) or is_temp_path(path)
+    def is_inside_memory(self, path: str) -> bool:
+        """path が今のプロジェクトのメモのフォルダの配下かを判定する（フォルダ自体は含まない）.
+
+        基準は親フォルダだけを実パスに解決し，memory の部分は解決しない．両方を解決して
+        比べると，memory がシンボリックリンクのときにリンク先の配下まで許可してしまう．
+        この形なら対象の実パスがリンク先に解決されるので基準から外れて拒否になる．
+        """
+        transcript = self.transcript_path
+        if not isinstance(transcript, str) or not transcript or "\0" in transcript or not is_absolute(transcript):
+            return False  # NUL を含むと realpath が例外を出し，フックが落ちて素通りになる
+        base = os.path.join(norm(os.path.dirname(os.path.normpath(transcript))), "memory")
+        return norm(path).startswith(base + os.sep)
+
+    def is_write_allowed(self, path: str, raw: str | None = None) -> bool:
+        """path（解決済み）への書き込みを許可するかを判定する．raw はコマンド中の元の文字列.
+
+        resolve_path の normpath で `..` が消えるので，元の文字列も見る．コピー先のエントリでは
+        コピー元の名前に由来する部分が解決済みのパスにしか現れないので，両方を見る必要がある．
+        """
+        if self.is_inside_repo(path) or is_temp_path(path):
+            return True
+        if is_ambiguous_for_memory(path) or (raw is not None and is_ambiguous_for_memory(raw)):
+            return False
+        return self.is_inside_memory(path)
 
 
 def deny_read_message(target: str, entry: str) -> str:
@@ -701,6 +745,13 @@ class Findings:
         self.writes: list = []  # (コマンド名, 元の文字列, 解決済みパス, 操作種別)
         self.reads: list = []  # (コマンド名, 元の文字列, 解決済みパス, 再帰的か)
         self.inline: list = []  # (コマンド名, リテラル, 解決済みパス, 操作種別)
+        # cd 等の移動先を文字列から確定できなかった（追跡中の cwd からはメモの配下と言えない）
+        self.ambiguous_cd = False
+
+    def note_location_change(self, dest: str) -> None:
+        """cd 等の移動先を記録する．移動先は最後の要素のワイルドカードも確定できない."""
+        if is_ambiguous_for_memory(dest + "/"):  # 末尾に区切りを足して最後の要素も途中の階層として見る
+            self.ambiguous_cd = True
 
 
 def normalize_literal(literal: str) -> str:
@@ -1101,6 +1152,7 @@ def analyze_bash(command: str, cwd: str | None, findings: Findings, depth: int =
             elif dest[0] == "-":
                 new_cwd = UNKNOWN
             else:
+                findings.note_location_change(dest[0])
                 new_cwd = resolve_path(dest[0], cwd)
                 if new_cwd == SPECIAL:
                     new_cwd = UNKNOWN
@@ -1307,6 +1359,7 @@ def analyze_powershell(command: str, cwd: str | None, findings: Findings, depth:
             elif dest[0] in ("-", "+"):
                 new_cwd = UNKNOWN
             else:
+                findings.note_location_change(dest[0])
                 new_cwd = resolve_path(dest[0], cwd, "powershell")
                 if new_cwd == SPECIAL:
                     new_cwd = UNKNOWN
@@ -1322,9 +1375,9 @@ def analyze_powershell(command: str, cwd: str | None, findings: Findings, depth:
 # ---------------------------------------------------------------------------
 # 判定
 # ---------------------------------------------------------------------------
-def destructive_reason(kind: str, resolved: str, policy: Policy) -> str | None:
+def destructive_reason(kind: str, raw: str, resolved: str, policy: Policy) -> str | None:
     """リポジトリ外の削除・既存ファイルの上書きなら，その説明（「削除」等）を返す."""
-    if kind == CREATE or policy.is_write_allowed(resolved):
+    if kind == CREATE or policy.is_write_allowed(resolved, raw):
         return None
     if kind == DELETE:
         return "ファイルの削除（移動を含む）"
@@ -1335,13 +1388,15 @@ def destructive_reason(kind: str, resolved: str, policy: Policy) -> str | None:
 
 def evaluate_findings(findings: Findings, policy: Policy) -> str | None:
     """解析結果を判定し，拒否する場合は理由文字列を返す."""
+    if findings.ambiguous_cd:
+        policy = Policy(policy.repo_root, policy.deny_read)  # メモのフォルダの許可だけを外す
     for name, raw, resolved, kind in findings.writes:
         if resolved in (UNKNOWN, SPECIAL):
             continue
         entry = policy.denied_entry(resolved)
         if entry:
             return deny_read_message(f"`{name}` が `{raw}` を対象としています", entry)
-        action = destructive_reason(kind, resolved, policy)
+        action = destructive_reason(kind, raw, resolved, policy)
         if action:
             return (
                 f"リポジトリ外の{action}をブロックしました: "
@@ -1353,7 +1408,7 @@ def evaluate_findings(findings: Findings, policy: Policy) -> str | None:
         entry = policy.denied_entry(resolved)
         if entry:
             return deny_read_message(f"`{name}` のコード中に `{raw}` が含まれています", entry)
-        action = destructive_reason(kind, resolved, policy)
+        action = destructive_reason(kind, raw, resolved, policy)
         if action:
             detail = "削除系の呼び出しとリポジトリ外のパス" if kind == DELETE else "リポジトリ外の既存ファイルへの上書き"
             return (
@@ -1378,14 +1433,16 @@ def check_shell_command(analyzer, command: str, cwd: str, policy: Policy) -> str
     return evaluate_findings(findings, policy)
 
 
-def check_bash_command(command: str, cwd: str, repo_root: str | None = None, deny_read: list | None = None) -> str | None:
+def check_bash_command(command: str, cwd: str, repo_root: str | None = None, deny_read: list | None = None,
+                       transcript_path: str | None = None) -> str | None:
     """Bash コマンドがリポジトリ外の削除・上書き，禁止パスへのアクセスを含むか判定する."""
-    return check_shell_command(analyze_bash, command, cwd, Policy(repo_root or cwd, deny_read or []))
+    return check_shell_command(analyze_bash, command, cwd, Policy(repo_root or cwd, deny_read or [], transcript_path))
 
 
-def check_powershell_command(command: str, cwd: str, repo_root: str | None = None, deny_read: list | None = None) -> str | None:
+def check_powershell_command(command: str, cwd: str, repo_root: str | None = None, deny_read: list | None = None,
+                             transcript_path: str | None = None) -> str | None:
     """PowerShell コマンドがリポジトリ外の削除・上書き，禁止パスへのアクセスを含むか判定する."""
-    return check_shell_command(analyze_powershell, command, cwd, Policy(repo_root or cwd, deny_read or []))
+    return check_shell_command(analyze_powershell, command, cwd, Policy(repo_root or cwd, deny_read or [], transcript_path))
 
 
 def glob_base(pattern: str) -> str:
@@ -1423,7 +1480,7 @@ def check_file_tool(tool_name: str, tool_input: dict, cwd: str, policy: Policy) 
             entry = policy.contained_denied_entry(resolved)
         if entry:
             return deny_read_message(raw, entry)
-        if destructive_reason(kind, resolved, policy):
+        if destructive_reason(kind, raw, resolved, policy):
             action = "既存ファイルの上書き" if kind == OVERWRITE else "既存ファイルの書き換え"
             return f"リポジトリ外の{action}をブロックしました: {raw}．{WRITE_DENY_GUIDANCE}"
     return None
@@ -1455,7 +1512,7 @@ def main() -> None:
     tool_input = data.get("tool_input", {}) or {}
     cwd = data.get("cwd") or os.getcwd()
     repo_root = get_repo_root(cwd)
-    policy = Policy(repo_root, load_deny_read(repo_root))
+    policy = Policy(repo_root, load_deny_read(repo_root), data.get("transcript_path"))
 
     if tool_name in ("Bash", "PowerShell"):
         analyzer = analyze_bash if tool_name == "Bash" else analyze_powershell
