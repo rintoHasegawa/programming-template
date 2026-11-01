@@ -846,19 +846,22 @@ class RestrictSandboxMixin:
         self.existing = os.path.join(self.out, "existing.txt")
         self.missing = os.path.join(self.out, "new_file.txt")
         self.deny = []
+        self.transcript_path = None  # フック入力の transcript_path に相当（既定は無し）
 
     def tearDown(self) -> None:
         shutil.rmtree(self.base, ignore_errors=True)
 
     # --- 判定ヘルパー ---
     def bash(self, command: str, cwd: str | None = None):
-        return self.rra.check_bash_command(command, cwd or self.repo, repo_root=self.repo, deny_read=self.deny)
+        return self.rra.check_bash_command(command, cwd or self.repo, repo_root=self.repo, deny_read=self.deny,
+                                           transcript_path=self.transcript_path)
 
     def ps(self, command: str, cwd: str | None = None):
-        return self.rra.check_powershell_command(command, cwd or self.repo, repo_root=self.repo, deny_read=self.deny)
+        return self.rra.check_powershell_command(command, cwd or self.repo, repo_root=self.repo, deny_read=self.deny,
+                                                 transcript_path=self.transcript_path)
 
     def tool(self, name: str, tool_input: dict, cwd: str | None = None):
-        policy = self.rra.Policy(self.repo, self.deny)
+        policy = self.rra.Policy(self.repo, self.deny, self.transcript_path)
         return self.rra.check_file_tool(name, tool_input, cwd or self.repo, policy)
 
     def fake_home(self):
@@ -1739,6 +1742,905 @@ class TestRestrictReasons(RestrictSandboxMixin, unittest.TestCase):
                 self.assertIn("迂回", reason)
                 self.assertNotIn("! <コマンド>", reason)
                 self.assertNotIn("`!", reason)
+
+
+# ---------------------------------------------------------------------------
+# 今のプロジェクトのメモのフォルダの許可（Issue #58）
+# ---------------------------------------------------------------------------
+class MemorySandboxMixin(RestrictSandboxMixin):
+    """home/.claude/
+         settings.json
+         projects/
+           memory/note.md             projects 直下の memory（別の場所）
+           proj/                      今のプロジェクト
+             session.jsonl            transcript_path
+             memory/note.md・sub/deep.md
+             memory2/note.md 等       名前の似たフォルダ
+             nested/memory/note.md    別の場所の memory
+           other/                     他のプロジェクト
+             session.jsonl・memory/note.md
+    """
+
+    SIMILAR_NAMES = ("memory2", "memory-old", "memory.bak", "memor", "xmemory")
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.dot_claude = os.path.join(self.home, ".claude")
+        self.projects = os.path.join(self.dot_claude, "projects")
+        self.proj = os.path.join(self.projects, "proj")
+        self.other = os.path.join(self.projects, "other")
+        self.memory = os.path.join(self.proj, "memory")
+        self.note = os.path.join(self.memory, "note.md")
+        self.deep_dir = os.path.join(self.memory, "sub")
+        self.deep = os.path.join(self.deep_dir, "deep.md")
+        self.new_note = os.path.join(self.memory, "new_note.md")
+        self.session = os.path.join(self.proj, "session.jsonl")
+        self.settings = os.path.join(self.dot_claude, "settings.json")
+        self.other_session = os.path.join(self.other, "session.jsonl")
+        self.other_note = os.path.join(self.other, "memory", "note.md")
+        self.elsewhere = [
+            os.path.join(self.out, "memory", "note.md"),
+            os.path.join(self.dot_claude, "memory", "note.md"),
+            os.path.join(self.projects, "memory", "note.md"),
+            os.path.join(self.proj, "nested", "memory", "note.md"),
+            os.path.join(self.memory, "..", "nested", "memory", "note.md"),
+        ]
+        self.similar = [os.path.join(self.proj, name, "note.md") for name in self.SIMILAR_NAMES]
+        for f in [self.note, self.deep, self.session, self.settings, self.other_session, self.other_note,
+                  *self.elsewhere, *self.similar]:
+            os.makedirs(os.path.dirname(f), exist_ok=True)
+            with open(f, "w", encoding="utf-8") as fh:
+                fh.write("x")
+        self.transcript_path = self.session
+
+    def link_dir(self, target: str, link: str) -> None:
+        """ディレクトリへのリンクを作る（Windows で権限が無ければジャンクションを使う）."""
+        try:
+            os.symlink(target, link, target_is_directory=True)
+            return
+        except OSError:
+            if os.name != "nt":
+                raise
+        result = subprocess.run(["cmd", "/c", "mklink", "/J", link, target], capture_output=True)
+        if result.returncode != 0:
+            self.skipTest("Windows でシンボリックリンクの権限が無く，ジャンクションも作成できない")
+
+    def write_ops(self, path: str) -> dict:
+        """既存ファイルを壊す操作（Edit・Write・rm・上書き）を Bash / PowerShell を含めて判定する."""
+        f = _fwd(path)
+        return {
+            "Edit": self.tool("Edit", {"file_path": path, "old_string": "x", "new_string": "y"}),
+            "Write": self.tool("Write", {"file_path": path, "content": "y"}),
+            "MultiEdit": self.tool("MultiEdit", {"file_path": path, "edits": []}),
+            "bash rm": self.bash(f'rm "{f}"'),
+            "bash rm -rf": self.bash(f'rm -rf "{f}"'),
+            "bash redirect": self.bash(f'echo y > "{f}"'),
+            "bash tee": self.bash(f'echo y | tee "{f}"'),
+            "bash sed -i": self.bash(f"sed -i s/x/y/ \"{f}\""),
+            "bash truncate": self.bash(f'truncate -s 0 "{f}"'),
+            "bash cp": self.bash(f'cp file.txt "{f}"'),
+            "bash mv": self.bash(f'mv "{f}" "{f}.moved"'),
+            "ps Remove-Item": self.ps(f'Remove-Item "{path}"'),
+            "ps Remove-Item -Force": self.ps(f'Remove-Item "{path}" -Recurse -Force'),
+            "ps redirect": self.ps(f'echo y > "{path}"'),
+            "ps Set-Content": self.ps(f'Set-Content "{path}" y'),
+            "ps Out-File": self.ps(f'echo y | Out-File "{path}"'),
+            "ps Copy-Item": self.ps(f'Copy-Item file.txt "{path}"'),
+            "ps Move-Item": self.ps(f'Move-Item "{path}" "{path}.moved"'),
+        }
+
+    def assertAllWriteOpsAllowed(self, path: str) -> None:
+        for label, reason in self.write_ops(path).items():
+            with self.subTest(op=label, path=path):
+                self.assertAllowed(reason, label)
+
+    def assertAllWriteOpsDenied(self, path: str) -> None:
+        for label, reason in self.write_ops(path).items():
+            with self.subTest(op=label, path=path):
+                self.assertDenied(reason, label)
+
+
+class TestRestrictMemoryAllowed(MemorySandboxMixin, unittest.TestCase):
+    """memory の配下は Edit・Write・rm・上書きのすべてが許可される（文字列から確定できないパスを除く）."""
+
+    def test_all_write_ops_on_existing_file(self):
+        self.assertAllWriteOpsAllowed(self.note)
+
+    def test_all_write_ops_in_subfolder(self):
+        self.assertAllWriteOpsAllowed(self.deep)
+
+    def test_all_write_ops_on_missing_file(self):
+        self.assertAllWriteOpsAllowed(self.new_note)
+
+    def test_notebook_edit(self):
+        self.assertAllowed(self.tool("NotebookEdit", {"notebook_path": os.path.join(self.memory, "n.ipynb"), "new_source": "x"}))
+
+    def test_memory_folder_not_created_yet(self):
+        """memory がまだ無くても，配下への操作は許可される（判定は文字列の位置で決まる）."""
+        shutil.rmtree(self.memory)
+        self.assertAllWriteOpsAllowed(self.note)
+
+    def test_delete_subfolder(self):
+        d = _fwd(self.deep_dir)
+        self.assertAllowed(self.bash(f'rm -rf "{d}"'))
+        self.assertAllowed(self.bash(f'rmdir "{d}"'))
+        self.assertAllowed(self.ps(f'Remove-Item "{self.deep_dir}" -Recurse -Force'))
+
+    def test_relative_paths_from_cwd(self):
+        self.assertAllowed(self.bash("rm note.md", cwd=self.memory))
+        self.assertAllowed(self.bash("rm -rf sub", cwd=self.memory))
+        self.assertAllowed(self.bash("echo y > note.md", cwd=self.memory))
+        self.assertDenied(self.bash("rm ../note.md", cwd=self.deep_dir))
+        self.assertAllowed(self.bash("rm memory/note.md", cwd=self.proj))
+        self.assertAllowed(self.ps("Remove-Item note.md", cwd=self.memory))
+        self.assertAllowed(self.ps("Set-Content note.md y", cwd=self.memory))
+        self.assertDenied(self.ps("Remove-Item ..\\note.md", cwd=self.deep_dir))
+        self.assertAllowed(self.tool("Edit", {"file_path": "note.md"}, cwd=self.memory))
+        self.assertDenied(self.tool("Write", {"file_path": "../note.md"}, cwd=self.deep_dir))
+
+    def test_cd_into_memory_then_delete(self):
+        self.assertAllowed(self.bash(f'cd "{_fwd(self.memory)}" && rm note.md'))
+        self.assertAllowed(self.ps(f'Set-Location "{self.memory}"; Remove-Item note.md'))
+
+    def test_dot_dot_staying_inside_memory_is_denied(self):
+        """`..` を含むパスは，正規化すると配下に留まる場合も許可しない（途中がリンクだと外に出るため）."""
+        path = os.path.join(self.deep_dir, "..", "note.md")
+        self.assertDenied(self.tool("Edit", {"file_path": path}))
+        self.assertDenied(self.bash(f'rm "{_fwd(path)}"'))
+        self.assertDenied(self.ps(f'Remove-Item "{path}"'))
+
+    def test_home_shorthand(self):
+        with self.fake_home():
+            self.assertAllowed(self.bash("rm ~/.claude/projects/proj/memory/note.md"))
+            self.assertAllowed(self.bash("echo y > $HOME/.claude/projects/proj/memory/note.md"))
+            self.assertAllowed(self.ps("Remove-Item $HOME/.claude/projects/proj/memory/note.md"))
+            self.assertAllowed(self.tool("Edit", {"file_path": "~/.claude/projects/proj/memory/note.md"}))
+
+    def test_inline_python(self):
+        n = _fwd(self.note)
+        self.assertAllowed(self.bash(f"python -c \"import os; os.remove('{n}')\""))
+        self.assertAllowed(self.bash(f"python -c \"open('{n}', 'w').write('y')\""))
+
+    def test_glob_under_memory(self):
+        """memory の中身だけを指すワイルドカードは配下への操作なので許可される."""
+        self.assertAllowed(self.bash(f'rm -rf "{_fwd(self.memory)}"/*'))
+        self.assertAllowed(self.ps(f'Remove-Item "{os.path.join(self.memory, "*")}"'))
+
+    def test_brace_expansion_under_memory_is_denied(self):
+        """波括弧を含むパスは，展開後がすべて配下に留まる場合も許可しない."""
+        m = _fwd(self.memory)
+        self.assertDenied(self.bash(f"rm {m}/{{note.md,sub/deep.md}}"))
+        self.assertDenied(self.bash(f"rm -rf {m}/{{note.md,sub}}"))
+
+    def test_transcript_with_forward_slashes(self):
+        self.transcript_path = _fwd(self.session)
+        self.assertAllWriteOpsAllowed(self.note)
+
+    def test_transcript_with_dot_dot_is_normalized(self):
+        self.transcript_path = os.path.join(self.proj, "memory", "..", "session.jsonl")
+        self.assertAllowed(self.tool("Edit", {"file_path": self.note}))
+
+    def test_transcript_file_need_not_exist(self):
+        os.remove(self.session)
+        self.assertAllowed(self.tool("Edit", {"file_path": self.note}))
+
+    def test_transcript_parent_reached_through_link(self):
+        """親フォルダまでのリンクは同じ場所として扱う（macOS の /tmp 等）."""
+        linked = os.path.join(self.projects, "linked")
+        self.link_dir(self.proj, linked)
+        self.transcript_path = os.path.join(linked, "session.jsonl")
+        self.assertAllowed(self.tool("Edit", {"file_path": self.note}))
+        self.assertAllowed(self.tool("Edit", {"file_path": os.path.join(linked, "memory", "note.md")}))
+        self.transcript_path = self.session
+        self.assertAllowed(self.tool("Edit", {"file_path": os.path.join(linked, "memory", "note.md")}))
+
+    def test_other_zones_still_work(self):
+        self.assertAllowed(self.bash(f'rm "{_fwd(os.path.join(self.repo, "file.txt"))}"'))
+        self.assertDenied(self.bash(f'rm "{_fwd(self.existing)}"'))
+        self.assertAllowed(self.tool("Write", {"file_path": self.missing}))
+
+    def test_is_inside_memory(self):
+        policy = self.rra.Policy(self.repo, [], self.session)
+        self.assertTrue(policy.is_inside_memory(self.note))
+        self.assertTrue(policy.is_inside_memory(self.deep))
+        self.assertTrue(policy.is_inside_memory(self.new_note))
+        self.assertFalse(policy.is_inside_memory(self.other_note))
+        self.assertFalse(policy.is_inside_memory(self.session))
+
+
+class TestRestrictMemoryInvalidTranscript(MemorySandboxMixin, unittest.TestCase):
+    """transcript_path が使えないときは許可を追加しない（例外も出さない）."""
+
+    def invalid_values(self):
+        return {
+            "None": None,
+            "empty": "",
+            "int": 123,
+            "zero": 0,
+            "bool": True,
+            "list": [self.session],
+            "dict": {"path": self.session},
+            "relative file": "session.jsonl",
+            "relative dir": os.path.join("proj", "session.jsonl"),
+            "dot relative": os.path.join(".", "session.jsonl"),
+            "dot dot relative": os.path.join("..", "proj", "session.jsonl"),
+            "NUL at end": self.session + "\0",
+            "NUL in folder": os.path.join(self.proj + "\0", "session.jsonl"),
+        }
+
+    def test_policy_does_not_allow_memory(self):
+        for label, value in self.invalid_values().items():
+            with self.subTest(label):
+                policy = self.rra.Policy(self.repo, [], value)
+                self.assertFalse(policy.is_inside_memory(self.note))
+                self.assertFalse(policy.is_write_allowed(self.note))
+
+    def test_all_write_ops_denied(self):
+        for label, value in self.invalid_values().items():
+            self.transcript_path = value
+            with self.subTest(label):
+                self.assertAllWriteOpsDenied(self.note)
+
+    def test_relative_transcript_is_not_resolved_from_cwd(self):
+        """cwd から解決すれば今のプロジェクトになる相対パスでも許可しない."""
+        self.transcript_path = "session.jsonl"
+        self.assertDenied(self.bash("rm memory/note.md", cwd=self.proj))
+        self.assertDenied(self.ps("Remove-Item memory/note.md", cwd=self.proj))
+        self.assertDenied(self.tool("Edit", {"file_path": "memory/note.md"}, cwd=self.proj))
+
+    def test_omitted_argument_means_no_permission(self):
+        """transcript_path を渡さない既存の呼び方では許可されない."""
+        n = _fwd(self.note)
+        self.assertDenied(self.rra.check_bash_command(f'rm "{n}"', self.repo, repo_root=self.repo))
+        self.assertDenied(self.rra.check_powershell_command(f'Remove-Item "{self.note}"', self.repo, repo_root=self.repo))
+        self.assertDenied(self.rra.check_file_tool("Edit", {"file_path": self.note}, self.repo, self.rra.Policy(self.repo, [])))
+
+
+class TestRestrictMemoryDeniedPaths(MemorySandboxMixin, unittest.TestCase):
+    """memory の配下でないパスは transcript_path があっても拒否される."""
+
+    def test_other_project_memory(self):
+        self.assertAllWriteOpsDenied(self.other_note)
+
+    def test_other_project_transcript(self):
+        self.assertAllWriteOpsDenied(self.other_session)
+
+    def test_own_transcript(self):
+        self.assertAllWriteOpsDenied(self.session)
+
+    def test_settings_json(self):
+        self.assertAllWriteOpsDenied(self.settings)
+
+    def test_memory_folder_elsewhere(self):
+        for path in self.elsewhere:
+            self.assertAllWriteOpsDenied(path)
+
+    def test_similar_folder_names(self):
+        for path in self.similar:
+            self.assertAllWriteOpsDenied(path)
+
+    def test_dot_dot_escaping_memory(self):
+        for path in (os.path.join(self.memory, "..", "session.jsonl"),
+                     os.path.join(self.deep_dir, "..", "..", "session.jsonl"),
+                     os.path.join(self.memory, "..", "..", "other", "memory", "note.md"),
+                     os.path.join(self.memory, "..", "memory2", "note.md"),
+                     os.path.join(self.memory, "..", "..", "..", "settings.json")):
+            self.assertAllWriteOpsDenied(path)
+
+    def test_dot_dot_escaping_relative(self):
+        self.assertDenied(self.bash("rm ../session.jsonl", cwd=self.memory))
+        self.assertDenied(self.bash("echo y > ../session.jsonl", cwd=self.memory))
+        self.assertDenied(self.bash("rm ../../session.jsonl", cwd=self.deep_dir))
+        self.assertDenied(self.ps("Remove-Item ..\\session.jsonl", cwd=self.memory))
+        self.assertDenied(self.ps("Set-Content ..\\session.jsonl y", cwd=self.memory))
+        self.assertDenied(self.ps("Remove-Item ..\\..\\session.jsonl", cwd=self.deep_dir))
+        self.assertDenied(self.tool("Edit", {"file_path": "../session.jsonl"}, cwd=self.memory))
+        self.assertDenied(self.tool("Write", {"file_path": "../session.jsonl"}, cwd=self.memory))
+
+    def test_brace_expansion_escaping_memory(self):
+        """Bash は memory/{a,../x} を memory/a と memory/../x に展開する（`..` で外に出る）."""
+        m = _fwd(self.memory)
+        for cmd in (f"rm -rf {m}/{{a,../../other/memory}}", f"rm -rf {m}/{{../session.jsonl,note.md}}",
+                    f"rm -rf {m}/{{a,..}}"):
+            with self.subTest(cmd):
+                self.assertDenied(self.bash(cmd), cmd)
+
+    def test_transcript_of_other_project_does_not_allow_this_memory(self):
+        self.transcript_path = self.other_session
+        self.assertAllWriteOpsDenied(self.note)
+
+    def test_memory_is_directly_under_transcript_parent_only(self):
+        """transcript_path の親の親の memory や，親フォルダの下の別の階層の memory は対象外."""
+        self.transcript_path = os.path.join(self.proj, "nested", "session.jsonl")
+        self.assertAllWriteOpsDenied(self.note)
+
+    def test_home_shorthand(self):
+        with self.fake_home():
+            self.assertDenied(self.bash("rm -rf ~/.claude/projects/other/memory"))
+            self.assertDenied(self.bash("echo y > ~/.claude/settings.json"))
+            self.assertDenied(self.ps("Remove-Item $HOME/.claude/projects/other/memory/note.md"))
+            self.assertDenied(self.tool("Edit", {"file_path": "~/.claude/projects/other/memory/note.md"}))
+
+    def test_move_between_memory_and_outside(self):
+        """移動の両端を見る（移動元が外の削除，移動先が外の既存ファイルの上書き）."""
+        n, ex = _fwd(self.note), _fwd(self.existing)
+        self.assertDenied(self.bash(f'mv "{ex}" "{n}"'))
+        self.assertDenied(self.bash(f'mv "{n}" "{ex}"'))
+        self.assertDenied(self.ps(f'Move-Item "{self.existing}" "{self.note}"'))
+        self.assertDenied(self.ps(f'Move-Item "{self.note}" "{self.existing}"'))
+
+    def test_inline_python(self):
+        self.assertDenied(self.bash(f"python -c \"import os; os.remove('{_fwd(self.other_note)}')\""))
+        self.assertDenied(self.bash(f"python -c \"open('{_fwd(self.session)}', 'w').write('y')\""))
+
+
+class TestRestrictMemoryFolderItself(MemorySandboxMixin, unittest.TestCase):
+    """memory フォルダ自体の削除・移動は拒否される（memory/・memory/. も）."""
+
+    def forms(self):
+        return (
+            self.memory,
+            self.memory + os.sep,
+            os.path.join(self.memory, "."),
+            os.path.join(self.memory, "sub", ".."),
+            os.path.join(self.proj, ".", "memory"),
+            os.path.join(self.proj, "nested", "..", "memory"),
+        )
+
+    def test_is_inside_memory_is_false_for_folder_itself(self):
+        policy = self.rra.Policy(self.repo, [], self.session)
+        for path in self.forms():
+            with self.subTest(path):
+                self.assertFalse(policy.is_inside_memory(self.rra.resolve_path(path, self.repo)))
+                self.assertFalse(policy.is_inside_memory(path))
+
+    def test_bash_delete_and_move(self):
+        for path in self.forms():
+            p = _fwd(path)
+            for cmd in (f'rm -rf "{p}"', f'rm -r "{p}"', f'rmdir "{p}"', f'mv "{p}" "{_fwd(self.missing)}"',
+                        f'mv "{p}" "{_fwd(os.path.join(self.proj, "renamed"))}"',
+                        f"python -c \"import shutil; shutil.rmtree('{p}')\""):
+                with self.subTest(cmd):
+                    self.assertDenied(self.bash(cmd), cmd)
+
+    def test_powershell_delete_and_move(self):
+        for path in self.forms():
+            for cmd in (f'Remove-Item "{path}"', f'Remove-Item "{path}" -Recurse -Force', f'rd "{path}"',
+                        f'Move-Item "{path}" "{self.missing}"', f'Rename-Item "{path}" renamed'):
+                with self.subTest(cmd):
+                    self.assertDenied(self.ps(cmd), cmd)
+
+    def test_file_tools(self):
+        for path in self.forms():
+            with self.subTest(path):
+                self.assertDenied(self.tool("Edit", {"file_path": path}))
+                self.assertDenied(self.tool("Write", {"file_path": path}))
+
+    def test_overwrite_folder_path(self):
+        for path in self.forms():
+            with self.subTest(path):
+                self.assertDenied(self.bash(f'echo y > "{_fwd(path)}"'))
+                self.assertDenied(self.ps(f'Set-Content "{path}" y'))
+
+    def test_relative_from_parent(self):
+        for cmd in ("rm -rf memory", "rm -rf memory/", "rm -rf memory/.", "rm -rf ./memory", "mv memory renamed",
+                    "rm -rf nested/../memory"):
+            with self.subTest(cmd):
+                self.assertDenied(self.bash(cmd, cwd=self.proj), cmd)
+        for cmd in ("Remove-Item memory -Recurse", "Remove-Item memory\\ -Recurse", "Remove-Item memory\\. -Recurse",
+                    "Remove-Item .\\memory -Recurse", "Move-Item memory renamed", "Rename-Item memory renamed"):
+            with self.subTest(cmd):
+                self.assertDenied(self.ps(cmd, cwd=self.proj), cmd)
+
+    def test_relative_from_inside(self):
+        for cmd in ("rm -rf .", "rm -rf ./", "rm -rf ../memory", "mv ../memory ../renamed"):
+            with self.subTest(cmd):
+                self.assertDenied(self.bash(cmd, cwd=self.memory), cmd)
+        self.assertDenied(self.bash("rm -rf ..", cwd=self.deep_dir))
+        for cmd in ("Remove-Item . -Recurse", "Remove-Item ..\\memory -Recurse"):
+            with self.subTest(cmd):
+                self.assertDenied(self.ps(cmd, cwd=self.memory), cmd)
+        self.assertDenied(self.ps("Remove-Item .. -Recurse", cwd=self.deep_dir))
+
+    def test_cd_then_delete(self):
+        self.assertDenied(self.bash(f'cd "{_fwd(self.proj)}" && rm -rf memory'))
+        self.assertDenied(self.bash(f'cd "{_fwd(self.memory)}" && rm -rf .'))
+        self.assertDenied(self.bash(f'cd "{_fwd(self.memory)}" && cd .. && rm -rf memory'))
+        self.assertDenied(self.ps(f'Set-Location "{self.proj}"; Remove-Item memory -Recurse'))
+        self.assertDenied(self.ps(f'Set-Location "{self.memory}"; Remove-Item . -Recurse'))
+
+    def test_parent_folder_delete(self):
+        self.assertDenied(self.bash(f'rm -rf "{_fwd(self.proj)}"'))
+        self.assertDenied(self.ps(f'Remove-Item "{self.proj}" -Recurse'))
+
+    def test_glob_resolving_to_folder_itself(self):
+        self.assertDenied(self.bash(f'rm -rf "{_fwd(self.memory)}"/*/..'))
+
+
+class TestRestrictMemoryWildcards(MemorySandboxMixin, unittest.TestCase):
+    """memory の配下だと確定できないワイルドカードは拒否される."""
+
+    def test_delete_from_absolute(self):
+        projects = _fwd(self.projects)
+        for tail in ("*/memory", "*/memory/note.md", "*/memory/*", "pro*/memory/note.md", "pro?/memory/note.md",
+                     "proj/mem*", "proj/mem*/note.md", "proj/memory*", "proj/memory?/note.md", "proj/*", "*"):
+            with self.subTest(tail):
+                self.assertDenied(self.bash(f"rm -rf {projects}/{tail}"), tail)
+                self.assertDenied(self.ps(f"Remove-Item {projects}/{tail} -Recurse"), tail)
+
+    def test_delete_from_relative(self):
+        self.assertDenied(self.bash("rm -rf */memory", cwd=self.projects))
+        self.assertDenied(self.bash("rm -rf ../*/memory", cwd=self.proj))
+        self.assertDenied(self.bash("rm -rf ../../*/memory", cwd=self.memory))
+        self.assertDenied(self.bash("rm -rf mem*", cwd=self.proj))
+        self.assertDenied(self.ps("Remove-Item */memory -Recurse", cwd=self.projects))
+        self.assertDenied(self.ps("Remove-Item mem* -Recurse", cwd=self.proj))
+
+    def test_dot_dot_after_memory_then_wildcard(self):
+        m = _fwd(self.memory)
+        self.assertDenied(self.bash(f"rm -rf {m}/../../*/memory"))
+        self.assertDenied(self.ps(f"Remove-Item {m}/../../*/memory -Recurse"))
+
+    def test_edit_with_wildcard_path(self):
+        path = os.path.join(self.projects, "*", "memory", "note.md")
+        self.assertDenied(self.tool("Edit", {"file_path": path}))
+
+
+class TestRestrictMemoryLinks(MemorySandboxMixin, unittest.TestCase):
+    """シンボリックリンク（Windows で権限が無ければジャンクション）で外に出るパスは拒否される."""
+
+    def replace_memory_with_link(self, target: str) -> None:
+        shutil.rmtree(self.memory)
+        self.link_dir(target, self.memory)
+
+    def test_memory_links_outside(self):
+        target = os.path.join(self.out, "dir")
+        self.replace_memory_with_link(target)
+        self.assertAllWriteOpsDenied(os.path.join(self.memory, "file.txt"))
+
+    def test_memory_links_outside_missing_file(self):
+        self.replace_memory_with_link(os.path.join(self.out, "dir"))
+        path = os.path.join(self.memory, "no_such_file.txt")
+        self.assertDenied(self.tool("Edit", {"file_path": path}))
+        self.assertDenied(self.bash(f'rm "{_fwd(path)}"'))
+        self.assertDenied(self.ps(f'Remove-Item "{path}"'))
+
+    def test_memory_links_to_other_project_memory(self):
+        self.replace_memory_with_link(os.path.join(self.other, "memory"))
+        self.assertAllWriteOpsDenied(self.note)
+
+    def test_memory_links_to_similar_name(self):
+        self.replace_memory_with_link(os.path.join(self.proj, "memory2"))
+        self.assertAllWriteOpsDenied(self.note)
+
+    def test_memory_link_dangling(self):
+        target = os.path.join(self.out, "will_be_removed")
+        os.makedirs(target)
+        self.replace_memory_with_link(target)
+        os.rmdir(target)
+        path = os.path.join(self.memory, "x.md")
+        self.assertDenied(self.tool("Edit", {"file_path": path}))
+        self.assertDenied(self.bash(f'rm "{_fwd(path)}"'))
+        self.assertDenied(self.ps(f'Remove-Item "{path}"'))
+
+    def test_memory_link_itself_is_denied(self):
+        self.replace_memory_with_link(os.path.join(self.out, "dir"))
+        self.assertDenied(self.bash(f'rm -rf "{_fwd(self.memory)}"'))
+        self.assertDenied(self.ps(f'Remove-Item "{self.memory}" -Recurse'))
+
+    def test_is_inside_memory_false_when_memory_is_link(self):
+        self.replace_memory_with_link(os.path.join(self.out, "dir"))
+        policy = self.rra.Policy(self.repo, [], self.session)
+        self.assertFalse(policy.is_inside_memory(os.path.join(self.memory, "file.txt")))
+        self.assertFalse(policy.is_inside_memory(os.path.join(self.out, "dir", "file.txt")))
+
+    def test_link_inside_memory_to_outside(self):
+        link = os.path.join(self.memory, "escape")
+        self.link_dir(os.path.join(self.out, "dir"), link)
+        self.assertAllWriteOpsDenied(os.path.join(link, "file.txt"))
+
+    def test_link_inside_memory_to_transcript_folder(self):
+        link = os.path.join(self.memory, "up")
+        self.link_dir(self.proj, link)
+        self.assertAllWriteOpsDenied(os.path.join(link, "session.jsonl"))
+
+    def test_link_inside_memory_then_dot_dot(self):
+        """memory/escape/../x は OS が escape の先の親（memory の外）として解決する.
+
+        上書き系（Write・リダイレクト等）は変更前から通っている既存の穴のため，ここでは見ない.
+        """
+        link = os.path.join(self.memory, "escape")
+        self.link_dir(os.path.join(self.out, "dir"), link)
+        ops = self.write_ops(os.path.join(link, "..", "existing.txt"))
+        for label in ("Edit", "MultiEdit", "bash rm", "bash rm -rf", "bash truncate", "bash mv",
+                      "ps Remove-Item", "ps Remove-Item -Force", "ps Move-Item"):
+            with self.subTest(op=label):
+                self.assertDenied(ops[label], label)
+
+    def test_wildcard_matching_link_inside_memory(self):
+        """memory/*/file.txt はシェルが展開すると memory/escape/file.txt（memory の外の実体）になる."""
+        link = os.path.join(self.memory, "escape")
+        self.link_dir(os.path.join(self.out, "dir"), link)
+        path = _fwd(os.path.join(self.memory, "*", "file.txt"))
+        self.assertDenied(self.bash(f"rm {path}"))
+        self.assertDenied(self.ps(f"Remove-Item {path}"))
+
+    def test_cwd_inside_link_then_relative(self):
+        link = os.path.join(self.memory, "escape")
+        self.link_dir(os.path.join(self.out, "dir"), link)
+        self.assertDenied(self.bash("rm file.txt", cwd=link))
+        self.assertDenied(self.ps("Remove-Item file.txt", cwd=link))
+        self.assertDenied(self.tool("Edit", {"file_path": "file.txt"}, cwd=link))
+
+    def test_file_symlink_inside_memory_to_outside(self):
+        link = os.path.join(self.memory, "link.txt")
+        try:
+            os.symlink(self.existing, link)
+        except OSError:
+            if os.name != "nt":
+                raise
+            self.skipTest("Windows でシンボリックリンクの作成権限が無い（ファイルにはジャンクションを使えない）")
+        self.assertDenied(self.tool("Edit", {"file_path": link}))
+        self.assertDenied(self.tool("Write", {"file_path": link}))
+        self.assertDenied(self.bash(f'echo y > "{_fwd(link)}"'))
+        self.assertDenied(self.ps(f'Set-Content "{link}" y'))
+
+
+class TestRestrictMemoryLocationChange(MemorySandboxMixin, unittest.TestCase):
+    """cd 等の移動先を文字列から確定できないコマンドには memory の許可を与えない.
+
+    cd -P や PowerShell の Set-Location はリンクの先へ移動するので，その後の `..` は memory の外を
+    指しうる．判定上の cwd は memory の配下に見えるので，移動先の文字列で判断する必要がある.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.m = _fwd(self.memory)
+        self.link_dir(os.path.join(self.out, "dir"), os.path.join(self.memory, "escape"))
+
+    def test_bash_cd_physical_through_link_is_denied(self):
+        m = self.m
+        for cmd in (f'cd -P "{m}/escape/.." && rm x',
+                    f'cd -P "{m}/escape" && cd .. && rm x',
+                    f'cd -P "{m}/escape" && cd ../ && rm x',
+                    f'(cd -P "{m}/escape/.." && rm x)'):
+            with self.subTest(cmd):
+                self.assertDenied(self.bash(cmd), cmd)
+
+    def test_pushd_is_denied(self):
+        m = self.m
+        for cmd in (f'pushd "{m}/escape/.." && rm x', f'pushd "{m}/escape" && cd .. && rm x'):
+            with self.subTest(cmd):
+                self.assertDenied(self.bash(cmd), cmd)
+
+    def test_set_location_is_denied(self):
+        m = self.m
+        for cmd in (f'Set-Location "{m}/escape/.."; Remove-Item x',
+                    f'Set-Location "{m}/escape"; Set-Location ..; Remove-Item x',
+                    f'Set-Location -Path "{m}/escape/.."; Remove-Item x',
+                    f'Set-Location -LiteralPath "{m}/escape/.."; Remove-Item x',
+                    f'sl "{m}/escape/.."; Remove-Item x',
+                    f'Push-Location "{m}/escape/.."; Remove-Item x'):
+            with self.subTest(cmd):
+                self.assertDenied(self.ps(cmd), cmd)
+
+    def test_inside_bash_c_is_denied(self):
+        m = self.m
+        for cmd in (f"bash -c 'cd -P \"{m}/escape/..\" && rm x'",
+                    f"bash -c 'cd -P \"{m}/escape\" && cd .. && rm x'"):
+            with self.subTest(cmd):
+                self.assertDenied(self.bash(cmd), cmd)
+
+    def test_wildcard_destination_is_denied(self):
+        """移動先のワイルドカードは最後の要素でも確定できない（リンクに一致しうる）."""
+        m = self.m
+        for cmd in (f'cd "{m}"/* && rm -rf .', f'cd "{m}"/* && rm x', f'cd "{m}"/esc* && rm x'):
+            with self.subTest(cmd):
+                self.assertDenied(self.bash(cmd), cmd)
+        for cmd in (f'Set-Location "{m}/*"; Remove-Item x', f'Set-Location "{m}/esc*"; Remove-Item x'):
+            with self.subTest(cmd):
+                self.assertDenied(self.ps(cmd), cmd)
+
+    def test_brace_destination_is_denied(self):
+        self.assertDenied(self.bash(f'cd "{self.m}"/{{sub,escape}} && rm x'))
+
+    def test_plain_cd_is_allowed(self):
+        m = self.m
+        for cmd in (f'cd "{m}" && rm note.md', f'cd "{m}/" && rm note.md', f'cd "{m}/sub" && rm deep.md',
+                    f'cd "{m}" && rm -rf sub', f'pushd "{m}/sub" && rm deep.md',
+                    f"bash -c 'cd \"{m}\" && rm note.md'"):
+            with self.subTest(cmd):
+                self.assertAllowed(self.bash(cmd), cmd)
+        for cmd in (f'Set-Location "{m}"; Remove-Item note.md', f'Set-Location "{m}/sub"; Remove-Item deep.md',
+                    f'Set-Location -Path "{m}"; Remove-Item note.md'):
+            with self.subTest(cmd):
+                self.assertAllowed(self.ps(cmd), cmd)
+
+
+class TestRestrictMemoryTailWildcard(MemorySandboxMixin, unittest.TestCase):
+    """最後の要素だけのワイルドカードは許可し，途中の階層のワイルドカードは許可しない."""
+
+    def test_tail_wildcard_is_allowed(self):
+        m = _fwd(self.memory)
+        for tail in ("*", "*.md", "sub/*", "sub/*.md"):
+            with self.subTest(tail):
+                self.assertAllowed(self.bash(f'rm "{m}"/{tail}'), tail)
+                self.assertAllowed(self.ps(f'Remove-Item "{m}/{tail}"'), tail)
+
+    def test_trailing_slash_makes_wildcard_intermediate(self):
+        """`*/` はディレクトリ（リンクの先を含む）に一致するので，途中の階層と同じに扱う."""
+        m = _fwd(self.memory)
+        self.assertDenied(self.bash(f'rm -rf "{m}"/*/'))
+        self.assertDenied(self.ps(f'Remove-Item "{m}/*/" -Recurse'))
+
+    def test_intermediate_wildcard_is_denied(self):
+        m = _fwd(self.memory)
+        for tail in ("*/deep.md", "*/*", "s*/deep.md", "su?/deep.md", "[s]ub/deep.md"):
+            with self.subTest(tail):
+                self.assertDenied(self.bash(f'rm "{m}"/{tail}'), tail)
+                self.assertDenied(self.ps(f'Remove-Item "{m}/{tail}"'), tail)
+
+
+class TestRestrictMemoryCopyDest(MemorySandboxMixin, unittest.TestCase):
+    """コピー元の名前に由来する波括弧（copy_dest_entries が解決済みのパスにだけ付ける）の扱い."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.src = os.path.join(self.out, "x")
+        os.makedirs(self.src)
+        for name in ("a", "b"):
+            with open(os.path.join(self.src, name), "w", encoding="utf-8") as fh:
+                fh.write("x")
+
+    def m_dir(self) -> str:
+        return _fwd(self.memory) + "/"
+
+    def verdicts(self, command: str) -> tuple:
+        """transcript_path があるとき・無いときの判定（拒否なら True）を返す."""
+        with_transcript = self.bash(command) is not None
+        self.transcript_path = None
+        without_transcript = self.bash(command) is not None
+        self.transcript_path = self.session
+        return with_transcript, without_transcript
+
+    def test_entry_keeps_brace_and_gets_no_permission(self):
+        """コマンド中の書き込み先の文字列に波括弧が無くても，解決済みのパスで許可を与えない."""
+        raw = self.m_dir()
+        entries = self.rra.copy_dest_entries("cp", raw, [f"{_fwd(self.src)}/{{a,b}}"], self.repo, "bash")
+        self.assertEqual(len(entries), 1)
+        _, entry_raw, resolved, _ = entries[0]
+        self.assertEqual(entry_raw, raw)
+        self.assertEqual(os.path.basename(resolved), "{a,b}")
+        self.assertFalse(self.rra.Policy(self.repo, [], self.session).is_write_allowed(resolved, entry_raw))
+
+    def test_brace_source_when_literal_name_exists_is_denied(self):
+        with open(os.path.join(self.memory, "{a,b}"), "w", encoding="utf-8") as fh:
+            fh.write("x")
+        command = f'cp "{_fwd(self.src)}"/{{a,b}} "{self.m_dir()}"'
+        self.assertEqual(self.verdicts(command), (True, True))
+
+    def test_brace_source_does_not_depend_on_transcript(self):
+        """memory の許可に頼らないので，transcript_path の有無で判定が変わらない."""
+        for dest in (self.m_dir(), _fwd(self.memory)):
+            command = f'cp "{_fwd(self.src)}"/{{a,b}} "{dest}"'
+            with self.subTest(command):
+                with_transcript, without_transcript = self.verdicts(command)
+                self.assertEqual(with_transcript, without_transcript, command)
+
+    def test_plain_source_uses_memory_permission(self):
+        """比較用: 波括弧が無ければ memory の既存ファイルへのコピーは transcript_path で許可される."""
+        with open(os.path.join(self.memory, "a"), "w", encoding="utf-8") as fh:
+            fh.write("x")
+        command = f'cp "{_fwd(self.src)}/a" "{self.m_dir()}"'
+        self.assertEqual(self.verdicts(command), (False, True))
+
+
+class TestRestrictMemoryKeepsOtherZones(MemorySandboxMixin, unittest.TestCase):
+    """リポジトリ内・一時ディレクトリの判定は，曖昧なパスでも transcript_path の有無で変わらない."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.r = _fwd(self.repo)
+        self.t = _fwd(tempfile.gettempdir())
+
+    def verdicts(self, check, *args, **kwargs) -> tuple:
+        """transcript_path があるとき・無いときの判定（拒否なら True）を返す."""
+        with_transcript = check(*args, **kwargs) is not None
+        self.transcript_path = None
+        without_transcript = check(*args, **kwargs) is not None
+        self.transcript_path = self.session
+        return with_transcript, without_transcript
+
+    def bash_commands(self, base: str) -> list:
+        return [f'rm "{base}"/{{file.txt,sub}}', f'rm "{base}/sub/../file.txt"', f'rm "{base}"/*/x',
+                f'rm -rf "{base}"/*/', f'cd "{base}/sub/.." && rm file.txt', f'cd "{base}"/* && rm x',
+                f'cd "{base}"/{{sub,other}} && rm x']
+
+    def ps_commands(self, base: str) -> list:
+        return [f'Remove-Item "{base}/sub/../file.txt"', f'Remove-Item "{base}/*/x"',
+                f'Set-Location "{base}/sub/.."; Remove-Item file.txt', f'Set-Location "{base}/*"; Remove-Item x']
+
+    def test_repo_is_allowed(self):
+        for cmd in self.bash_commands(self.r):
+            with self.subTest(cmd):
+                self.assertEqual(self.verdicts(self.bash, cmd), (False, False), cmd)
+        for cmd in self.ps_commands(self.r):
+            with self.subTest(cmd):
+                self.assertEqual(self.verdicts(self.ps, cmd), (False, False), cmd)
+
+    def test_temp_is_allowed(self):
+        for cmd in self.bash_commands(self.t):
+            with self.subTest(cmd):
+                self.assertEqual(self.verdicts(self.bash, cmd), (False, False), cmd)
+        for cmd in self.ps_commands(self.t):
+            with self.subTest(cmd):
+                self.assertEqual(self.verdicts(self.ps, cmd), (False, False), cmd)
+
+    def test_file_tools(self):
+        for path in (os.path.join(self.repo, "sub", "..", "file.txt"), os.path.join(self.repo, "{a,b}", "x"),
+                     os.path.join(self.repo, "*", "x"), os.path.join(tempfile.gettempdir(), "a", "..", "x"),
+                     os.path.join(tempfile.gettempdir(), "{a,b}", "x"), os.path.join(tempfile.gettempdir(), "*", "x")):
+            for name in ("Edit", "Write"):
+                with self.subTest(name=name, path=path):
+                    self.assertEqual(self.verdicts(self.tool, name, {"file_path": path}), (False, False))
+
+    def test_relative_cd_up_inside_repo(self):
+        """移動先が曖昧でも外れるのは memory の許可だけで，リポジトリ内の許可は残る."""
+        self.assertEqual(self.verdicts(self.bash, "cd .. && rm file.txt", cwd=self.sub), (False, False))
+        self.assertEqual(self.verdicts(self.ps, "Set-Location ..; Remove-Item file.txt", cwd=self.sub), (False, False))
+
+    def test_outside_is_denied_either_way(self):
+        out = _fwd(self.out)
+        for cmd in (f'rm "{self.r}/../outside/existing.txt"', f'cd "{self.r}/.." && rm outside/existing.txt',
+                    f'rm "{out}"/{{existing.txt,dir}}', f'rm "{out}"/*/file.txt'):
+            with self.subTest(cmd):
+                self.assertEqual(self.verdicts(self.bash, cmd), (True, True), cmd)
+
+    def test_brace_leaving_repo_does_not_depend_on_transcript(self):
+        """リポジトリから波括弧で出るパスも，transcript_path の有無で判定が変わらない."""
+        command = f'rm "{self.r}"/{{file.txt,../outside/existing.txt}}'
+        with_transcript, without_transcript = self.verdicts(self.bash, command)
+        self.assertEqual(with_transcript, without_transcript)
+
+
+class TestRestrictMemoryDenyRead(MemorySandboxMixin, unittest.TestCase):
+    """deny_read は memory の許可より優先する."""
+
+    def assertDenyRead(self, reason, label=""):
+        self.assertIsNotNone(reason, label)
+        self.assertNotIn("! <コマンド>", reason, label)
+
+    def test_entry_inside_memory(self):
+        secret = os.path.join(self.memory, "sub")
+        self.deny = [secret]
+        for label, reason in self.write_ops(self.deep).items():
+            with self.subTest(label):
+                self.assertDenyRead(reason, label)
+        self.assertDenyRead(self.tool("Read", {"file_path": self.deep}))
+        self.assertDenyRead(self.bash(f'cat "{_fwd(self.deep)}"'))
+        self.assertDenyRead(self.ps(f'Get-Content "{self.deep}"'))
+        self.assertAllWriteOpsAllowed(self.note)
+
+    def test_memory_folder_is_denied_entirely(self):
+        self.deny = [self.memory]
+        for label, reason in self.write_ops(self.note).items():
+            with self.subTest(label):
+                self.assertDenyRead(reason, label)
+
+    def test_entry_above_memory(self):
+        self.deny = [self.projects]
+        self.assertDenyRead(self.tool("Edit", {"file_path": self.note}))
+        self.assertDenyRead(self.bash(f'rm "{_fwd(self.note)}"'))
+        self.assertDenyRead(self.ps(f'Remove-Item "{self.note}"'))
+
+
+class TestRestrictMemoryViaMain(MemorySandboxMixin, unittest.TestCase):
+    """main に標準入力で JSON を渡す経路で transcript_path が実際に使われること."""
+
+    def env(self) -> dict:
+        return dict(os.environ, CLAUDE_PROJECT_DIR=self.repo)
+
+    def hook_inputs(self, path: str) -> dict:
+        f = _fwd(path)
+        return {
+            "Edit": ("Edit", {"file_path": path, "old_string": "x", "new_string": "y"}),
+            "Write": ("Write", {"file_path": path, "content": "y"}),
+            "Bash rm": ("Bash", {"command": f'rm "{f}"'}),
+            "Bash redirect": ("Bash", {"command": f'echo y > "{f}"'}),
+            "PowerShell Remove-Item": ("PowerShell", {"command": f'Remove-Item "{path}"'}),
+            "PowerShell Set-Content": ("PowerShell", {"command": f'Set-Content "{path}" y'}),
+        }
+
+    def run_tool(self, tool_name: str, tool_input: dict, **extra):
+        data = dict({"tool_name": tool_name, "tool_input": tool_input, "cwd": self.repo}, **extra)
+        return self.run_main(data, self.env())
+
+    def assertHookAllows(self, result, label=""):
+        self.assertEqual(result.returncode, 0, (label, result.stderr))
+        self.assertIsNone(self.decision(result), (label, result.stdout))
+
+    def assertHookDenies(self, result, label=""):
+        self.assertEqual(result.returncode, 0, (label, result.stderr))
+        self.assertEqual(self.decision(result), "deny", (label, result.stdout))
+
+    def test_allowed_with_transcript_path(self):
+        for label, (name, tool_input) in self.hook_inputs(self.note).items():
+            with self.subTest(label):
+                self.assertHookAllows(self.run_tool(name, tool_input, transcript_path=self.session), label)
+
+    def test_denied_without_transcript_path(self):
+        for label, (name, tool_input) in self.hook_inputs(self.note).items():
+            with self.subTest(label):
+                self.assertHookDenies(self.run_tool(name, tool_input), label)
+
+    def test_denied_with_unusable_transcript_path(self):
+        name, tool_input = self.hook_inputs(self.note)["Edit"]
+        for value in (None, "", 123, True, [self.session], {"a": 1}, "session.jsonl", self.session + "\0"):
+            with self.subTest(repr(value)):
+                self.assertHookDenies(self.run_tool(name, tool_input, transcript_path=value))
+
+    def test_denied_for_other_project(self):
+        for label, (name, tool_input) in self.hook_inputs(self.other_note).items():
+            with self.subTest(label):
+                self.assertHookDenies(self.run_tool(name, tool_input, transcript_path=self.session), label)
+
+    def test_denied_for_memory_folder_itself(self):
+        cases = [("Bash", {"command": f'rm -rf "{_fwd(self.memory)}"'}),
+                 ("Bash", {"command": f'rm -rf "{_fwd(self.memory)}/"'}),
+                 ("Bash", {"command": f'rm -rf "{_fwd(self.memory)}/."'}),
+                 ("PowerShell", {"command": f'Remove-Item "{self.memory}" -Recurse'})]
+        for name, tool_input in cases:
+            with self.subTest(tool_input["command"]):
+                self.assertHookDenies(self.run_tool(name, tool_input, transcript_path=self.session))
+
+    def test_deny_read_config_wins(self):
+        with open(os.path.join(self.repo, ".claude", "repo-access.json"), "w", encoding="utf-8") as fh:
+            json.dump({"deny_read": [self.memory]}, fh)
+        name, tool_input = self.hook_inputs(self.note)["Edit"]
+        self.assertHookDenies(self.run_tool(name, tool_input, transcript_path=self.session))
+
+    def test_via_wrapper_like_settings_json(self):
+        """settings.json と同じコマンド（run_python.sh 経由）でも transcript_path が届く."""
+        data = {"tool_name": "Edit", "tool_input": {"file_path": self.note, "old_string": "x", "new_string": "y"},
+                "cwd": self.repo}
+        command = [BASH, ".claude/hooks/run_python.sh", "--fail-closed", ".claude/hooks/restrict_repo_access.py"]
+
+        def run(payload):
+            return subprocess.run(command, input=json.dumps(payload).encode("utf-8"), capture_output=True,
+                                  env=self.env(), cwd=REPO_ROOT, timeout=TIMEOUT)
+
+        self.assertHookAllows(run(dict(data, transcript_path=self.session)))
+        self.assertHookDenies(run(data))
+
+
+@unittest.skipUnless(os.name == "nt", "ドライブレター・Git Bash 形式・大文字小文字の同一視は Windows 固有のため")
+class TestRestrictMemoryWindows(MemorySandboxMixin, unittest.TestCase):
+    def test_git_bash_form_paths(self):
+        self.assertAllowed(self.bash(f'rm "{_gitbash(self.note)}"'))
+        self.assertAllowed(self.bash(f'echo y > "{_gitbash(self.note)}"'))
+        self.assertDenied(self.bash(f'rm -rf "{_gitbash(self.memory)}"'))
+        self.assertDenied(self.bash(f'rm "{_gitbash(self.other_note)}"'))
+
+    def test_case_insensitive(self):
+        upper = os.path.join(self.proj, "MEMORY", "NOTE.md")
+        self.assertAllowed(self.tool("Edit", {"file_path": upper}))
+        self.assertAllowed(self.ps(f'Remove-Item "{upper}"'))
+        self.assertDenied(self.ps(f'Remove-Item "{os.path.join(self.proj, "MEMORY")}" -Recurse'))
+        self.transcript_path = self.session.upper()
+        self.assertAllowed(self.tool("Edit", {"file_path": self.note}))
+
+    def test_drive_relative_transcript_is_not_absolute(self):
+        self.transcript_path = self.session[:2] + os.path.relpath(self.session, self.session[:3])
+        self.assertDenied(self.tool("Edit", {"file_path": self.note}))
+
+    def test_junction_memory_explicitly(self):
+        """シンボリックリンクの権限の有無によらず，ジャンクションでも許可しない."""
+        target = os.path.join(self.out, "dir")
+        shutil.rmtree(self.memory)
+        result = subprocess.run(["cmd", "/c", "mklink", "/J", self.memory, target], capture_output=True)
+        if result.returncode != 0:
+            self.skipTest("ジャンクションを作成できない環境")
+        self.assertAllWriteOpsDenied(os.path.join(self.memory, "file.txt"))
 
 
 if __name__ == "__main__":
