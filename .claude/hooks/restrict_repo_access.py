@@ -30,7 +30,9 @@
 許可ゾーン（リポジトリ外でも削除・上書きを許可する）:
 - システム一時ディレクトリ（/tmp・%TEMP% 等．Claude Code のスクラッチパッドを含む）
   （/sync-template・/set-mode がテンプレートを mktemp -d に clone して cp・rm -rf
-   するため．一時ディレクトリは使い捨て領域であり，許可しても失うものがない）
+   するため．一時ディレクトリは使い捨て領域であり，許可しても失うものがない）．
+  Linux / macOS ではリンクを解決した実パスで判定するので，一時ディレクトリの外へのリンク越しの
+  操作は許可しない（rm 等がリンク自体を消すだけの場合は許可する）
 - /dev/null・NUL・$null 等の特殊デバイス
 - 今のプロジェクトの Claude メモのフォルダの配下（フック入力の transcript_path の親
   フォルダ直下の memory の中．メモの更新・修正・削除は Claude の通常の作業のため）．
@@ -64,8 +66,8 @@
   許可，それ以外は拒否する．読み取り（禁止リスト）の判定はワイルドカードを展開しない．
   cmd.exe のコマンド・インライン実行のコードは波括弧・ワイルドカード・リンクの展開の対象外．
   Windows PowerShell 5.1 は Set-Location - / Push-Location - を受け付けず元の場所に留まるが，追跡は 7 系の挙動に合わせる．
-  Linux の /tmp 配下のリンク越しのパス（/tmp の文字列判定で許可される），pushd -n <dir>（実際には移動しないが
-  移動として扱う），サブシェル内の pushd / popd（スタックを復元しない）は，実際の対象とずれることがある．
+  pushd -n <dir>（実際には移動しないが移動として扱う），サブシェル内の pushd / popd
+  （スタックを復元しない）は，実際の対象とずれることがある．
   逆にインライン実行は，削除系の呼び出しとリポジトリ外のパス（文字列・コメント中の
   ものも含む）が同時に現れると，削除対象でなくても拒否することがある．
   cmd.exe の引数のうち /opt のように / の後に要素が 1 つだけのパスは，スイッチ
@@ -286,21 +288,45 @@ def is_within_directory(target: str, base: str) -> bool:
     return real_target.startswith(real_base)
 
 
-def is_temp_path(path: str) -> bool:
+def is_real_path_in_temp(path: str, keep_final_link: bool) -> bool:
+    """POSIX で，リンクを解決した path の実パスが /tmp か tempfile.gettempdir() の中にあるかを判定する.
+
+    基準も実パスに解決して比べる（macOS の /tmp → /private/tmp，/var/folders/... → /private/var/folders/...）．
+    存在しない要素は realpath が文字どおりに残すので，新規作成のパスは存在する部分までの解決で判定される．
+    keep_final_link なら最後の要素のリンクを解決しない（リンク自体を消す操作の判定用）．
+    """
+    head, tail = os.path.split(path)
+    if keep_final_link and tail not in ("", ".", ".."):
+        real = os.path.join(os.path.realpath(head), tail)
+    else:
+        real = os.path.realpath(path)
+    for base in ("/tmp", tempfile.gettempdir()):
+        real_base = os.path.realpath(base)
+        if real == real_base or real.startswith(real_base.rstrip("/") + "/"):
+            return True
+    return False
+
+
+def is_temp_path(path: str, keep_final_link: bool = False) -> bool:
     """path がシステム一時ディレクトリ配下かを判定する.
 
-    OS ネイティブの一時ディレクトリ（tempfile.gettempdir()）に加え，
-    Git Bash 等の POSIX 形式 /tmp も文字列正規化で判定する
-    （Windows では /tmp が実パスに解決できないため realpath に頼れない）．
-    `..` は正規化してから判定するので /tmp/../etc のような脱出は温存されない．
+    POSIX では文字列で /tmp 配下に見えても，リンクを解決した実パスが一時ディレクトリの中になければ
+    配下と見なさない（/tmp/x/escape/file の escape が外へのリンクのとき，実際に壊れるのは外のファイル）．
+    Windows では /tmp（Git Bash）が実パスに解決できないので文字列正規化で判定し，
+    OS ネイティブの一時ディレクトリ（tempfile.gettempdir()）は実パスで判定する．
+    どちらも `..` を畳んでから判定するので /tmp/../etc のような脱出は温存されない．
+    keep_final_link は POSIX でだけ効く（Windows は従来どおりの判定のまま）．
+    想定外の失敗は例外を外へ漏らさず，一時ディレクトリの外として扱う（安全側）．
     """
-    normalized = posixpath.normpath(path.replace("\\", "/"))
-    if normalized == "/tmp" or normalized.startswith("/tmp/"):
-        return True
-    # macOS の /tmp は /private/tmp へのリンクなので，要素をたどって解決したパスも /tmp として扱う
-    if os.name != "nt" and is_within_directory(path, "/tmp"):
-        return True
-    return is_within_directory(path, tempfile.gettempdir())
+    try:
+        if os.name != "nt":
+            return is_real_path_in_temp(path, keep_final_link)
+        normalized = posixpath.normpath(path.replace("\\", "/"))
+        if normalized == "/tmp" or normalized.startswith("/tmp/"):
+            return True
+        return is_within_directory(path, tempfile.gettempdir())
+    except Exception:
+        return False
 
 
 def home_dir() -> str:
@@ -658,7 +684,7 @@ def walked_targets(raw: str, cwd: str | None, dialect: str, wildcards: bool = Tr
             truncated = truncated or cut
         if follow_final_links:
             # 実際に消えるのはリンク先の中身なので，その実パスも判定する．リンク自体のパスのままだと，
-            # /tmp の文字列判定（is_temp_path）で一時ディレクトリの中と見なされ素通りする（Linux で確認）
+            # リンク自体を消す操作として（removes_only_link）一時ディレクトリの中と見なされ素通りする
             found += [os.path.realpath(path) for path in found if is_link_or_junction(path)]
         return found, truncated
     except Exception:
@@ -726,13 +752,14 @@ class Policy:
         base = os.path.join(norm(os.path.dirname(os.path.normpath(transcript))), "memory")
         return norm(path).startswith(base + os.sep)
 
-    def is_write_allowed(self, path: str, raw: str | None = None) -> bool:
+    def is_write_allowed(self, path: str, raw: str | None = None, keep_final_link: bool = False) -> bool:
         """path（解決済み）への書き込みを許可するかを判定する．raw はコマンド中の元の文字列.
 
         resolve_path の normpath で `..` が消えるので，元の文字列も見る．コピー先のエントリでは
         コピー元の名前に由来する部分が解決済みのパスにしか現れないので，両方を見る必要がある．
+        keep_final_link は一時ディレクトリの判定で最後の要素のリンクを解決しない（removes_only_link 参照）．
         """
-        if self.is_inside_repo(path) or is_temp_path(path):
+        if self.is_inside_repo(path) or is_temp_path(path, keep_final_link):
             return True
         if is_ambiguous_for_memory(path) or (raw is not None and is_ambiguous_for_memory(raw)):
             return False
@@ -1761,9 +1788,17 @@ def analyze_powershell(command: str, cwd: str | None, findings: Findings, depth:
 # ---------------------------------------------------------------------------
 # 判定
 # ---------------------------------------------------------------------------
-def destructive_reason(kind: str, raw: str, resolved: str, policy: Policy) -> str | None:
+def removes_only_link(name: str, raw: str, kind: str) -> bool:
+    """最後の要素がリンクでも，リンク自体を消すだけでリンク先に触らない操作かを判定する.
+
+    末尾に区切りがあるとリンク先の中身に届くことがある（reaches_link_target_by_trailing_separator）ので含めない．
+    """
+    return kind == DELETE and name in REMOVES_LINK_ITSELF and not raw.endswith(("/", "\\"))
+
+
+def destructive_reason(kind: str, raw: str, resolved: str, policy: Policy, name: str = "") -> str | None:
     """リポジトリ外の削除・既存ファイルの上書きなら，その説明（「削除」等）を返す."""
-    if kind == CREATE or policy.is_write_allowed(resolved, raw):
+    if kind == CREATE or policy.is_write_allowed(resolved, raw, removes_only_link(name, raw, kind)):
         return None
     if kind == DELETE:
         return "ファイルの削除（移動を含む）"
@@ -1791,7 +1826,7 @@ def evaluate_findings(findings: Findings, policy: Policy) -> str | None:
         entry = policy.denied_entry(resolved)
         if entry:
             return deny_read_message(f"`{name}` が `{raw}` を対象としています", entry)
-        action = destructive_reason(kind, raw, resolved, policy)
+        action = destructive_reason(kind, raw, resolved, policy, name)
         if action:
             return (
                 f"リポジトリ外の{action}をブロックしました: "

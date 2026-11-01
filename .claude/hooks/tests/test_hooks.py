@@ -3392,5 +3392,388 @@ class TestRestrictPushdMinus(Issue59SandboxMixin, unittest.TestCase):
         self.assertPsAllowed(["Push-Location -; Remove-Item x"], cwd=self.out)
 
 
+# ---------------------------------------------------------------------------
+# is_temp_path: Linux / macOS はリンクを解決した実パスで一時ディレクトリを判定する
+# ---------------------------------------------------------------------------
+REAL_PATH_TEMP_REASON = (
+    "実パスでの一時ディレクトリの判定は Linux / macOS だけの仕様のため"
+    "（Windows は Git Bash の /tmp を実パスに解決できず，従来の文字列判定のまま）"
+)
+
+
+class TempLinkSandboxMixin(Issue59SandboxMixin):
+    """実際の一時ディレクトリの中にサンドボックスを作り，リンク先はその外（self.out）に作る.
+
+    <temp>/file.txt・realdir/f.txt
+    <temp>/escape     → outside/dir（既存の file.txt を含む）．make_escape で作る
+    <temp>/filelink   → outside/existing.txt．make_filelink で作る
+    <temp>/innerlink  → <temp>/realdir．make_innerlink で作る
+    """
+
+    temp_parent = None  # None は tempfile.gettempdir()
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.temp = tempfile.mkdtemp(prefix="_restrict_temp_link_", dir=self.temp_parent)
+        self.addCleanup(shutil.rmtree, self.temp, True)
+        self.t = _fwd(self.temp)
+        self.assertTrue(self.rra.is_temp_path(self.temp), "サンドボックスが一時ディレクトリの中にあること")
+        self.assertFalse(self.rra.is_temp_path(self.out), "リンク先が一時ディレクトリの外にあること")
+        self.touch(self.temp, "file.txt")
+        self.touch(self.temp, "realdir", "f.txt")
+
+    def make_escape(self) -> str:
+        link = os.path.join(self.temp, "escape")
+        self.link_dir(os.path.join(self.out, "dir"), link)
+        self.assertTrue(os.path.isfile(os.path.join(link, "file.txt")), "リンク先は既存のファイルであること")
+        return link
+
+    def make_filelink(self) -> str:
+        link = os.path.join(self.temp, "filelink")
+        os.symlink(self.existing, link)
+        self.assertTrue(os.path.isfile(link), "リンク先は既存のファイルであること")
+        return link
+
+    def make_innerlink(self) -> str:
+        link = os.path.join(self.temp, "innerlink")
+        self.link_dir(os.path.join(self.temp, "realdir"), link)
+        return link
+
+
+@unittest.skipIf(os.name == "nt", REAL_PATH_TEMP_REASON)
+class TestRestrictTempLinkEscapeDenied(TempLinkSandboxMixin, unittest.TestCase):
+    """一時ディレクトリの中に見えても，リンク越しに壊れるのが外のファイルなら拒否する."""
+
+    def test_operations_through_directory_link(self):
+        self.make_escape()
+        t, r = self.t, self.r
+        self.assertBashDenied([
+            f"rm {t}/escape/file.txt",
+            f"rm -rf {t}/escape/file.txt",
+            f"echo y > {t}/escape/file.txt",
+            f"cp {r}/file.txt {t}/escape/file.txt",
+            f"mv {t}/escape/file.txt {t}/moved",
+            f"sed -i s/x/y/ {t}/escape/file.txt",
+        ])
+
+    def test_relative_path_through_directory_link(self):
+        self.make_escape()
+        self.assertBashDenied(["rm escape/file.txt", "echo y > escape/file.txt"], cwd=self.temp)
+
+    def test_operations_on_file_link(self):
+        """> ・cp・truncate・shred はリンク自体ではなくリンク先のファイルを壊す."""
+        self.make_filelink()
+        t, r = self.t, self.r
+        self.assertBashDenied([
+            f"echo y > {t}/filelink",
+            f"cp {r}/file.txt {t}/filelink",
+            f"truncate -s 0 {t}/filelink",
+            f"shred {t}/filelink",
+        ])
+
+    def test_find_delete_from_link(self):
+        self.make_escape()
+        self.assertBashDenied([f"find {self.t}/escape -delete"])
+
+    def test_nested_shell_prefix_and_inline_code(self):
+        self.make_escape()
+        t = self.t
+        self.assertBashDenied([
+            f"bash -c 'rm {t}/escape/file.txt'",
+            f"sudo rm {t}/escape/file.txt",
+            f"python3 -c \"import os; os.remove('{t}/escape/file.txt')\"",
+        ])
+
+    def test_link_inside_the_link_target(self):
+        """最後の要素がリンクでも，その親がリンク越しに外にあれば，リンク自体を消す操作も外の変更になる."""
+        self.make_escape()
+        os.symlink(self.existing, os.path.join(self.out, "dir", "inner"))
+        self.assertBashDenied([f"rm {self.t}/escape/inner"])
+
+    def test_dotdot_escape(self):
+        rel = _fwd(os.path.relpath(self.existing, self.temp))
+        self.assertTrue(rel.startswith(".."), rel)
+        self.assertBashDenied([f"rm {self.t}/{rel}", f"rm -rf {self.t}/{rel}", f"echo y > {self.t}/{rel}"])
+
+    def test_powershell_and_file_tools(self):
+        """実パスでの判定はシェルの種類やツールによらない."""
+        escape = self.make_escape()
+        filelink = self.make_filelink()
+        target = os.path.join(escape, "file.txt")
+        self.assertPsDenied([f"Remove-Item {self.t}/escape/file.txt", f"Set-Content {self.t}/escape/file.txt y"])
+        for path in (target, filelink):
+            with self.subTest(path):
+                self.assertDenied(self.tool("Write", {"file_path": path, "content": "y"}), path)
+                self.assertDenied(self.tool("Edit", {"file_path": path, "old_string": "x", "new_string": "y"}), path)
+
+
+@unittest.skipIf(os.name == "nt", REAL_PATH_TEMP_REASON + "．Windows のリンク自体の削除は keep_final_link の対象外")
+class TestRestrictTempLinkItselfAllowed(TempLinkSandboxMixin, unittest.TestCase):
+    """リンク自体を消す・動かすだけの操作はリンク先に触らないので，許可のまま."""
+
+    def test_remove_link_itself(self):
+        self.make_escape()
+        self.make_filelink()
+        for link in ("escape", "filelink"):
+            f = f"{self.t}/{link}"
+            self.assertBashAllowed([f"rm {f}", f"rm -rf {f}", f"unlink {f}", f"mv {f} {self.t}/other"])
+
+    def test_relative_link_itself(self):
+        self.make_escape()
+        self.assertBashAllowed(["rm escape", "rm -rf escape", "unlink escape", "mv escape other"], cwd=self.temp)
+
+    def test_wildcard_matching_links(self):
+        self.make_escape()
+        self.make_filelink()
+        self.assertBashAllowed([f"rm {self.t}/*", f"rm -rf {self.t}/*"])
+
+
+class TestRestrictTempWithoutEscapeAllowed(TempLinkSandboxMixin, unittest.TestCase):
+    """外へのリンクが関わらない一時ディレクトリの操作は，どの OS でも許可のまま."""
+
+    def test_delete_and_overwrite_without_link(self):
+        t, r = self.t, self.r
+        self.assertBashAllowed([
+            f"rm {t}/file.txt",
+            f"rm -rf {t}/realdir",
+            f"rm -rf {t}/realdir/",
+            f"echo y > {t}/file.txt",
+            f"cp {r}/file.txt {t}/file.txt",
+            f"mv {t}/file.txt {t}/moved",
+            f"sed -i s/x/y/ {t}/file.txt",
+            f"truncate -s 0 {t}/file.txt",
+            f"shred {t}/file.txt",
+        ])
+
+    def test_through_link_to_inside_temp(self):
+        self.make_innerlink()
+        t, r = self.t, self.r
+        self.assertBashAllowed([
+            f"rm {t}/innerlink/f.txt",
+            f"rm -rf {t}/innerlink/",
+            f"echo y > {t}/innerlink/f.txt",
+            f"cp {r}/file.txt {t}/innerlink/f.txt",
+        ])
+
+    def test_create_with_missing_parents(self):
+        t, r = self.t, self.r
+        self.assertBashAllowed([
+            f"touch {t}/new.txt",
+            f"echo y > {t}/no/such/parent/new.txt",
+            f"mkdir -p {t}/no/such/parent",
+            f"cp {r}/file.txt {t}/no/such/parent/new.txt",
+            f"rm -rf {t}/no/such/parent",
+        ])
+        self.assertAllowed(self.tool("Write", {"file_path": os.path.join(self.temp, "no", "such", "new.txt"), "content": "y"}))
+
+
+class TestRestrictTempSkillCommandShapes(TempLinkSandboxMixin, unittest.TestCase):
+    """/sync-template・/set-mode が mktemp -d の配下で実行するコマンドの形."""
+
+    def shapes(self, root: str) -> list:
+        r = self.r
+        return [
+            f'git clone --depth 1 https://example.invalid/t.git "{root}/tpl"',
+            f': > "{root}/overrides.tsv"',
+            f'mkdir -p "{root}/3way/.claude" "{root}/merged/.claude"',
+            f'cp "{r}/file.txt" "{root}/3way/ours"',
+            f'cp "{root}/tpl/file.txt" "{r}/file.txt"',
+            f"sed 's/\\r$//' \"{r}/file.txt\" > \"{root}/3way/ours\"",
+            f'rm -rf "{root}/tpl" "{root}"',
+            f'rm -rf "{root}"',
+        ]
+
+    def test_shapes_on_existing_files(self):
+        root = os.path.join(self.temp, "work")
+        for name in ("overrides.tsv", os.path.join("3way", "ours"), os.path.join("tpl", "file.txt")):
+            self.touch(root, name)
+        self.assertBashAllowed(self.shapes(_fwd(root)))
+
+    @unittest.skipIf(os.name == "nt", "mktemp コマンドの実体を直接呼べるのは Linux / macOS だけのため（Windows は Git Bash 経由）")
+    def test_shapes_under_real_mktemp(self):
+        if shutil.which("mktemp") is None:
+            self.skipTest("mktemp コマンドが無い")
+        root = subprocess.check_output(["mktemp", "-d"], universal_newlines=True).strip()
+        self.addCleanup(shutil.rmtree, root, True)
+        for name in ("overrides.tsv", os.path.join("3way", "ours"), os.path.join("tpl", "file.txt")):
+            self.touch(root, name)
+        self.assertBashAllowed(self.shapes(root))
+
+    def test_shapes_with_shell_variables(self):
+        self.assertBashAllowed([
+            'TEMP_DIR=$(mktemp -d)\ngit clone --depth 1 "$U" "$TEMP_DIR"\ncp "$TEMP_DIR/$f" "$f"\nrm -rf "$TEMP_DIR"',
+            'WORK_DIR=$(mktemp -d)\n: > "$WORK_DIR/overrides.tsv"\nmkdir -p "$WORK_DIR/3way"\nrm -rf "$WORK_DIR"',
+        ])
+
+
+@unittest.skipIf(os.name == "nt", "基準の /tmp を実パスに解決できるのは Linux / macOS だけのため（Windows の /tmp は Git Bash の仮想パス）")
+class TestRestrictTempLinkUnderSlashTmp(TempLinkSandboxMixin, unittest.TestCase):
+    """基準の一方である /tmp を直接使う（gettempdir が別の場所の macOS 等でも /tmp を判定できること）."""
+
+    temp_parent = "/tmp"
+
+    def setUp(self) -> None:
+        if not (os.path.isdir("/tmp") and os.access("/tmp", os.W_OK)):
+            self.skipTest("/tmp が存在しないか書き込めない")
+        super().setUp()
+
+    def test_escape_is_denied(self):
+        self.make_escape()
+        self.make_filelink()
+        t = self.t
+        self.assertBashDenied([f"rm {t}/escape/file.txt", f"echo y > {t}/filelink", f"rm /tmp/..{_fwd(self.existing)}"])
+
+    def test_without_escape_is_allowed(self):
+        self.make_escape()
+        t = self.t
+        name = os.path.basename(self.temp)
+        self.assertBashAllowed([f"rm {t}/escape", f"rm {t}/file.txt", f"echo y > {t}/no/such/parent/new.txt",
+                                f"rm -rf {t}/no/such/parent", f"rm /tmp/{name}/file.txt"])
+
+    def test_is_temp_path(self):
+        self.make_escape()
+        self.assertTrue(self.rra.is_temp_path("/tmp"))
+        self.assertTrue(self.rra.is_temp_path(f"/tmp/{os.path.basename(self.temp)}/no/such/file"))
+        self.assertFalse(self.rra.is_temp_path(f"{self.t}/escape/file.txt"))
+        self.assertTrue(self.rra.is_temp_path(f"{self.t}/escape", True))
+        self.assertFalse(self.rra.is_temp_path(f"{self.t}/escape"))
+        self.assertFalse(self.rra.is_temp_path("/tmp/../etc"))
+
+
+@unittest.skipUnless(os.name == "nt", "Git Bash 形式の /tmp は Windows にしか存在しないため")
+class TestRestrictGitBashTmpOnWindows(RestrictSandboxMixin, unittest.TestCase):
+    """Windows の /tmp は実パスに解決できないので，今までどおり文字列で許可する."""
+
+    def test_is_temp_path(self):
+        for path in ("/tmp", "/tmp/x", "/tmp/x/y.txt", "/tmp/tmp.AbCdEf/tpl", "\\tmp\\x"):
+            with self.subTest(path):
+                self.assertTrue(self.rra.is_temp_path(path))
+                self.assertTrue(self.rra.is_temp_path(path, True), "keep_final_link は Windows では効かない")
+        for path in ("/tmp/../etc", "/tmpfoo/x", "/etc/hosts"):
+            with self.subTest(path):
+                self.assertFalse(self.rra.is_temp_path(path))
+
+    def test_commands(self):
+        for cmd in ("rm /tmp/x", "rm -rf /tmp/x", "echo y > /tmp/x/y.txt", "cp file.txt /tmp/x", "mkdir -p /tmp/x/y",
+                    'git clone --depth 1 https://example.invalid/t.git "/tmp/tmp.AbCdEf"', ': > "/tmp/tmp.AbCdEf/o.tsv"'):
+            with self.subTest(cmd):
+                self.assertAllowed(self.bash(cmd), cmd)
+
+
+class TestContainedDeniedEntryInTemp(TempLinkSandboxMixin, unittest.TestCase):
+    """再帰読み取りの起点の配下にある禁止パスの検出（Policy.contained_denied_entry）."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.secret = os.path.join(self.out, "dir")
+        self.deny = [self.secret]
+
+    def policy(self):
+        return self.rra.Policy(self.repo, self.deny)
+
+    @unittest.skipIf(os.name == "nt", REAL_PATH_TEMP_REASON)
+    def test_link_to_outside_detects_denied_entry(self):
+        link = os.path.join(self.temp, "toout")
+        self.link_dir(self.out, link)
+        self.assertEqual(self.policy().contained_denied_entry(link), self.secret)
+        self.assertDenied(self.bash(f"grep -r x {_fwd(link)}"))
+        self.assertDenied(self.tool("Grep", {"pattern": "x", "path": link}))
+        self.assertDenied(self.tool("Glob", {"pattern": "*", "path": link}))
+
+    def test_temp_without_link_detects_nothing(self):
+        self.assertIsNone(self.policy().contained_denied_entry(self.temp))
+        self.assertAllowed(self.bash(f"grep -r x {self.t}"))
+
+    def test_denied_entry_inside_temp_is_not_contained(self):
+        """一時ディレクトリは対象外なので，配下に禁止パスがあっても検出しない（検出の条件が効いていること）."""
+        self.deny = [os.path.join(self.temp, "realdir")]
+        self.assertIsNone(self.policy().contained_denied_entry(self.temp))
+
+
+MACOS_TEMPDIR = "/var/folders/ab/cd/T"
+
+
+def _fake_macos_realpath(path, **_):
+    """macOS のリンク（/tmp → /private/tmp，/var → /private/var）と，/tmp/x/escape → /Users/me/data を模擬する."""
+    path = posixpath.normpath(path)
+    for link, target in (("/tmp/x/escape", "/Users/me/data"), ("/tmp", "/private/tmp"), ("/var", "/private/var")):
+        if path == link or path.startswith(link + "/"):
+            return _fake_macos_realpath(target + path[len(link):])
+    return path
+
+
+@contextlib.contextmanager
+def _simulate_macos_paths(module):
+    """module から見える os を POSIX 相当にし，posixpath.realpath と tempfile.gettempdir を macOS 相当にする.
+
+    with を抜けると（例外時も）mock.patch が元に戻すので，他のテストには影響しない．
+    """
+    with _simulate_posix_host(module), \
+            mock.patch.object(posixpath, "realpath", _fake_macos_realpath), \
+            mock.patch.object(tempfile, "gettempdir", lambda: MACOS_TEMPDIR):
+        yield
+
+
+class TestIsTempPathMacOSSimulation(unittest.TestCase):
+    """macOS のパス構成を差し替えで模擬する（実機は PR の CI で確認する）.
+
+    os.name と os.path も POSIX 相当に差し替えるので，ホスト OS によらず実行できる．
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.rra = _load_restrict()
+
+    def test_temp_paths_are_allowed(self):
+        cases = ("/tmp", "/tmp/new/file", "/private/tmp", "/private/tmp/new/file",
+                 MACOS_TEMPDIR, MACOS_TEMPDIR + "/tmp.abc/file",
+                 "/private" + MACOS_TEMPDIR, "/private" + MACOS_TEMPDIR + "/tmp.abc/file")
+        with _simulate_macos_paths(self.rra):
+            for path in cases:
+                with self.subTest(path):
+                    self.assertTrue(self.rra.is_temp_path(path))
+
+    def test_link_itself_keeps_final_component(self):
+        with _simulate_macos_paths(self.rra):
+            for path in ("/tmp/x/escape", MACOS_TEMPDIR + "/tmp.abc", "/tmp/tmp.abc"):
+                with self.subTest(path):
+                    self.assertTrue(self.rra.is_temp_path(path, True))
+
+    def test_outside_paths_are_not_temp(self):
+        cases = ("/tmp/x/escape", "/tmp/x/escape/file.txt", "/tmp/../etc", "/private/etc/hosts", "/var/log/x",
+                 "/private/tmpfoo/x", "/tmpfoo/x", MACOS_TEMPDIR + "foo/x", "/private/var/folders")
+        with _simulate_macos_paths(self.rra):
+            for path in cases:
+                with self.subTest(path):
+                    self.assertFalse(self.rra.is_temp_path(path))
+
+    def test_keep_final_link_does_not_hide_parent_link(self):
+        with _simulate_macos_paths(self.rra):
+            self.assertFalse(self.rra.is_temp_path("/tmp/x/escape/file.txt", True))
+
+    def test_commands(self):
+        repo = "/work/repo"
+        with _simulate_macos_paths(self.rra):
+            for cmd in ("rm /tmp/tmp.abc/file", f"rm -rf {MACOS_TEMPDIR}/tmp.abc", "rm -rf /tmp/x/escape",
+                        "rm /private/tmp/tmp.abc/file"):
+                with self.subTest(cmd):
+                    self.assertIsNone(self.rra.check_bash_command(cmd, repo, repo, []))
+            for cmd in ("rm /tmp/x/escape/file.txt", "rm /private/etc/hosts", "rm /tmp/../etc/hosts"):
+                with self.subTest(cmd):
+                    self.assertIsNotNone(self.rra.check_bash_command(cmd, repo, repo, []))
+
+    def test_simulation_is_restored(self):
+        real_realpath = posixpath.realpath
+        real_gettempdir = tempfile.gettempdir
+        with self.assertRaises(RuntimeError):
+            with _simulate_macos_paths(self.rra):
+                self.assertEqual(self.rra.os.path.realpath("/tmp"), "/private/tmp")
+                self.assertEqual(tempfile.gettempdir(), MACOS_TEMPDIR)
+                raise RuntimeError("x")
+        self.assertIs(posixpath.realpath, real_realpath)
+        self.assertIs(tempfile.gettempdir, real_gettempdir)
+        self.assertIs(self.rra.os, os)
+
+
 if __name__ == "__main__":
     unittest.main()
