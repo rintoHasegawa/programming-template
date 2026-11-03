@@ -18,6 +18,10 @@
 - インライン実行（python -c 等）: 削除系の呼び出しがありリポジトリ外のパスを
   含む場合と，既知の上書き呼び出し（open(..., 'w') 等）の対象が既存ファイルの場合に拒否する
 - 禁止リスト（deny_read）に該当するパスは，どの操作でも拒否する
+- 入力の読み取りや判定で想定外の例外が起きたら拒否する（壊れた入力を含む．対象がリポジトリ外かは問わない）
+- Bash / PowerShell のコマンドに NUL 文字があれば拒否する（コマンドの種類・対象を問わない）
+- Bash / PowerShell のコマンドと Write / Edit / MultiEdit / NotebookEdit の書き込み先のパスが，
+  項目はあるのに文字列でなければ拒否する（対象がリポジトリ外かは問わない）
 
 リポジトリの基準は CLAUDE_PROJECT_DIR（無ければフック入力の cwd）．相対パスは
 フック入力の cwd を起点に，コマンド内の cd / pushd / Set-Location 等を追跡して解決する．
@@ -25,7 +29,7 @@
 禁止リスト: <リポジトリ>/.claude/repo-access.json
     {"deny_read": ["~/.ssh", "/etc", "secrets"]}
   絶対パス・`~` 始まり・リポジトリルート相対を受け付ける．ファイルが無ければ空，
-  壊れていれば空として扱い stderr に警告する．
+  壊れていれば空として扱い stderr に警告する（警告を書けなければ想定外の例外として拒否する）．
 
 許可ゾーン（リポジトリ外でも削除・上書きを許可する）:
 - システム一時ディレクトリ（/tmp・%TEMP% 等．Claude Code のスクラッチパッドを含む）
@@ -87,6 +91,7 @@ import re
 import stat
 import sys
 import tempfile
+import traceback
 
 CONFIG_RELPATH = ".claude/repo-access.json"
 
@@ -102,6 +107,18 @@ DENY_READ_GUIDANCE = (
     "ユーザーが読ませたくない場所として指定しているパスです．"
     "別の書き方で迂回して読まないでください"
 )
+NUL_COMMAND_DENY_REASON = (
+    "コマンドに NUL 文字が含まれていて対象を判定できないため，ブロックしました．"
+    "別の書き方（変数・スクリプトファイル・インライン実行等）で迂回しないでください．"
+    "NUL が意図しないものならコマンドを見直し，必要な操作であればユーザーに報告してください"
+)
+INVALID_VALUE_TYPE_DENY_REASON = (
+    "ツールの入力のコマンドまたは書き込み先のパスが文字列ではなく，型が不正で対象を判定できないため，ブロックしました．"
+    "別の書き方（変数・スクリプトファイル・インライン実行等）で迂回しないでください．"
+    "入力を見直し，解決しなければユーザーに報告してください"
+)
+# 書き込みとして判定するファイル操作ツールと，そのパスの項目
+WRITE_TOOL_PATH_KEYS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path", "NotebookEdit": "notebook_path"}
 
 # 解決できないパスを表す（変数展開を含む等）．判定をスキップする
 UNKNOWN = None
@@ -748,7 +765,7 @@ class Policy:
         """
         transcript = self.transcript_path
         if not isinstance(transcript, str) or not transcript or "\0" in transcript or not is_absolute(transcript):
-            return False  # NUL を含むと realpath が例外を出し，フックが落ちて素通りになる
+            return False  # NUL を含むと realpath が例外を出し，どのパスの判定でも拒否になってしまう
         base = os.path.join(norm(os.path.dirname(os.path.normpath(transcript))), "memory")
         return norm(path).startswith(base + os.sep)
 
@@ -786,10 +803,9 @@ def load_deny_read(repo_root: str) -> list:
         if not isinstance(entries, list) or not all(isinstance(e, str) for e in entries):
             raise ValueError("deny_read は文字列の配列で指定してください")
     except (OSError, ValueError) as e:
-        print(
-            f"[restrict_repo_access] {CONFIG_RELPATH} を読み込めないため禁止リストを空として扱います: {e}",
-            file=sys.stderr,
-        )
+        # print(file=sys.stderr) は sys.stderr が None だと stdout に出て，拒否の JSON を壊す．
+        # write なら例外になり，stderr に書けないときと同じく deny_on_exception で拒否される
+        sys.stderr.write(f"[restrict_repo_access] {CONFIG_RELPATH} を読み込めないため禁止リストを空として扱います: {e}\n")
         return []
     result = []
     for entry in entries:
@@ -1928,6 +1944,8 @@ def deny(reason: str) -> None:
         }
     }
     json.dump(result, sys.stdout)
+    # 終了時の flush に任せると，失敗しても例外にならず終了コード 120（非ブロック）になって素通りする
+    sys.stdout.flush()
     sys.exit(0)
 
 
@@ -1938,23 +1956,75 @@ def get_repo_root(cwd: str) -> str:
     return cwd
 
 
-def main() -> None:
-    data = json.load(sys.stdin)
+def deny_on_exception(error: Exception) -> None:
+    """想定外の例外が起きたときにツール呼び出しを拒否する（異常終了すると非ブロックのエラーとして素通りする）."""
+    try:
+        # print(file=sys.stderr) は sys.stderr が None だと stdout に出て，拒否の JSON を壊す
+        sys.stderr.write(traceback.format_exc())
+    except Exception:
+        pass  # stderr への出力に失敗しても拒否は続ける
+    try:
+        deny(
+            f"リポジトリ外アクセス制限フックが想定外の例外（{type(error).__name__}）で判定できなかったため，"
+            "安全のためツール呼び出しをブロックしました．フックの不具合の可能性があります．"
+            "`.claude/hooks/restrict_repo_access.py` を確認してください（詳細は stderr に出力しています）．"
+            "別の書き方で迂回せず，解決しなければユーザーに報告してください"
+        )
+    except SystemExit:
+        # 拒否の出力は済んでいる．stderr のバッファに残ったトレースバックの flush が終了時に失敗すると，
+        # 終了コードが 120 に変わるので，ここで試してから終了時の flush を通らずに終わる
+        try:
+            sys.stderr.flush()
+        except Exception:
+            pass
+        os._exit(0)
+    except Exception:
+        # stdout に書けないので終了コード 2 でブロックする．sys.exit だと終了時の flush の失敗で 120 に変わる
+        os._exit(2)
+
+
+def has_invalid_value_type(tool_name: str, tool_input: dict) -> bool:
+    """判定の対象の値（コマンド・書き込み先のパス）が，存在するのに文字列でないかを判定する.
+
+    0・[]・None も文字列ではないので該当する（項目が無い場合と空文字列は該当しない）．
+    読み取り系などの他のツールは対象にしない．
+    """
+    key = "command" if tool_name in ("Bash", "PowerShell") else WRITE_TOOL_PATH_KEYS.get(tool_name)
+    return key is not None and key in tool_input and not isinstance(tool_input[key], str)
+
+
+def run_check() -> None:
+    # 入力は UTF-8 の JSON．sys.stdin のテキストモードはロケールの文字コードで読むので，cp932 の Windows では
+    # 日本語の直後の \" が壊れて JSONDecodeError になる（例外を拒否にしたので，正常な入力まで止まってしまう）
+    data = json.load(sys.stdin.buffer)
     tool_name = data.get("tool_name", "")
     tool_input = data.get("tool_input", {}) or {}
     cwd = data.get("cwd") or os.getcwd()
     repo_root = get_repo_root(cwd)
     policy = Policy(repo_root, load_deny_read(repo_root), data.get("transcript_path"))
 
+    if has_invalid_value_type(tool_name, tool_input):
+        deny(INVALID_VALUE_TYPE_DENY_REASON)
+
     if tool_name in ("Bash", "PowerShell"):
         analyzer = analyze_bash if tool_name == "Bash" else analyze_powershell
-        reason = check_shell_command(analyzer, tool_input.get("command", "") or "", cwd, policy)
+        command = tool_input.get("command", "")  # 文字列でない値は has_invalid_value_type で拒否済み
+        # 実際の argv に NUL は入らず，シェルが取り除くかどうかで対象が変わる．OS によって例外になったり
+        # 一時ディレクトリとして許可されたりするので，解析の前にコマンドの種類を問わず一律に拒否する
+        reason = NUL_COMMAND_DENY_REASON if "\0" in command else check_shell_command(analyzer, command, cwd, policy)
     else:
         reason = check_file_tool(tool_name, tool_input, cwd, policy)
 
     if reason:
         deny(reason)
     sys.exit(0)
+
+
+def main() -> None:
+    try:
+        run_check()
+    except Exception as error:  # SystemExit（deny の sys.exit）・KeyboardInterrupt は Exception ではないので通す
+        deny_on_exception(error)
 
 
 if __name__ == "__main__":

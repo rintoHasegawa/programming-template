@@ -3775,5 +3775,727 @@ class TestIsTempPathMacOSSimulation(unittest.TestCase):
         self.assertIs(self.rra.os, os)
 
 
+# ---------------------------------------------------------------------------
+# restrict_repo_access.py: 想定外の例外・壊れた入力の拒否（Issue #62）
+# ---------------------------------------------------------------------------
+# 判定の結果は標準入力・標準出力・終了コードで見る（フックの入出力の仕様そのものなので）．
+# 例外を起こすテストは，本物のプロセスの終了コードを見るために subprocess の中で関数を差し替える．
+HOOK_DRIVER = (
+    "import io, os, sys\n"
+    "sys.path.insert(0, sys.argv[1])\n"
+    "import restrict_repo_access as rra\n"
+    "exec(sys.argv[2])\n"
+    "rra.main()\n"
+)
+HOOK_RAISE = (
+    "class ZzBoom(Exception):\n"
+    "    pass\n"
+    "def boom(*args, **kwargs):\n"
+    "    raise ZzBoom('SECRET_MESSAGE')\n"
+    "{target} = boom\n"
+)
+UNEXPECTED_PREFIX = "想定外の例外（"
+NUL_REASON = "NUL 文字"
+WRAPPER_COMMAND = [BASH, ".claude/hooks/run_python.sh", "--fail-closed", ".claude/hooks/restrict_repo_access.py"]
+
+
+class HookIOMixin(RestrictSandboxMixin):
+    """main に標準入力でバイト列を渡し，拒否の JSON・終了コード・stderr を確かめる."""
+
+    def hook_env(self, project_dir: bool = True, **extra) -> dict:
+        env = dict(os.environ)
+        env.pop("CLAUDE_PROJECT_DIR", None)
+        if project_dir:
+            env["CLAUDE_PROJECT_DIR"] = self.repo
+        env.update(extra)
+        return env
+
+    @staticmethod
+    def raw(data) -> bytes:
+        """Claude Code と同じ，ASCII エスケープしない生の UTF-8 の JSON."""
+        return json.dumps(data, ensure_ascii=False).encode("utf-8")
+
+    def feed(self, payload: bytes, env: dict | None = None, stdout=subprocess.PIPE, stderr=subprocess.PIPE):
+        return subprocess.run([sys.executable, "-B", RESTRICT], input=payload, stdout=stdout, stderr=stderr,
+                              env=self.hook_env() if env is None else env, cwd=self.repo, timeout=TIMEOUT)
+
+    def feed_tool(self, tool_name, tool_input, env: dict | None = None, **extra):
+        data = dict({"tool_name": tool_name, "tool_input": tool_input, "cwd": self.repo}, **extra)
+        return self.feed(self.raw(data), env)
+
+    def feed_driver(self, setup: str, payload: bytes, stdout=subprocess.PIPE, stderr=subprocess.PIPE):
+        """フックの一部を差し替えてから main を実行する（setup は rra を名前で参照できる）."""
+        return subprocess.run([sys.executable, "-B", "-c", HOOK_DRIVER, HOOKS_DIR, setup], input=payload,
+                              stdout=stdout, stderr=stderr, env=self.hook_env(), cwd=self.repo, timeout=TIMEOUT)
+
+    def feed_wrapper(self, payload: bytes, stdout=subprocess.PIPE):
+        """settings.json と同じコマンド（run_python.sh --fail-closed 経由）で起動する."""
+        return subprocess.run(WRAPPER_COMMAND, input=payload, stdout=stdout, stderr=subprocess.PIPE,
+                              env=self.hook_env(), cwd=REPO_ROOT, timeout=TIMEOUT)
+
+    def assertHookDenies(self, result, label="") -> str:
+        """通常の拒否と同じ形の JSON（1 個だけ）と終了コード 0 を確かめ，理由を返す."""
+        self.assertEqual(result.returncode, 0, (label, result.stdout, result.stderr))
+        self.assertTrue(result.stdout.strip(), ("拒否の JSON が出力されていない（許可された）", label))
+        output = json.loads(result.stdout.decode("utf-8"))["hookSpecificOutput"]
+        self.assertEqual(output["hookEventName"], "PreToolUse", label)
+        self.assertEqual(output["permissionDecision"], "deny", label)
+        self.assertTrue(output["permissionDecisionReason"], label)
+        return output["permissionDecisionReason"]
+
+    def assertHookDeniesUnexpected(self, result, label="") -> str:
+        reason = self.assertHookDenies(result, label)
+        self.assertIn(UNEXPECTED_PREFIX, reason, label)
+        return reason
+
+    def assertHookAllows(self, result, label="") -> None:
+        self.assertEqual(result.returncode, 0, (label, result.stdout, result.stderr))
+        self.assertEqual(result.stdout.strip(), b"", label)
+        self.assertEqual(result.stderr.strip(), b"", label)
+
+    @contextlib.contextmanager
+    def unwritable(self, kind: str):
+        """書き込みに失敗する標準出力・標準エラー用のファイル記述子を用意する."""
+        if kind == "read-only file":
+            path = os.path.join(self.base, "readonly.txt")
+            with open(path, "wb"):
+                pass
+            with open(path, "rb") as f:
+                yield f
+        else:  # 読み手のいないパイプ
+            read_end, write_end = os.pipe()
+            os.close(read_end)
+            try:
+                yield write_end
+            finally:
+                os.close(write_end)
+
+    UNWRITABLE_KINDS = ("read-only file", "closed pipe")
+
+
+class TestHookUnexpectedException(HookIOMixin, unittest.TestCase):
+    """判定中の想定外の例外は拒否になる（理由は型名だけで，コマンドや例外メッセージを含まない）."""
+
+    def payload(self, tool_name="Bash", tool_input=None):
+        if tool_input is None:
+            tool_input = {"command": "echo SECRET_COMMAND"}
+        return self.raw({"tool_name": tool_name, "tool_input": tool_input, "cwd": self.repo})
+
+    def test_exception_is_denied_with_type_name(self):
+        cases = {
+            "shell check": ("rra.check_shell_command", "Bash", None),
+            "powershell check": ("rra.check_shell_command", "PowerShell", None),
+            "file check": ("rra.check_file_tool", "Read", {"file_path": "SECRET_COMMAND"}),
+            "config": ("rra.load_deny_read", "Bash", None),
+            "repo root": ("rra.get_repo_root", "Read", {"file_path": "SECRET_COMMAND"}),
+            "realpath": ("os.path.realpath", "Bash", {"command": "rm ./SECRET_COMMAND"}),
+        }
+        for label, (target, tool_name, tool_input) in cases.items():
+            with self.subTest(label):
+                result = self.feed_driver(HOOK_RAISE.format(target=target), self.payload(tool_name, tool_input))
+                reason = self.assertHookDenies(result, label)
+                self.assertIn("想定外の例外（ZzBoom）", reason)
+                self.assertNotIn("SECRET_COMMAND", reason)
+                self.assertNotIn("SECRET_MESSAGE", reason)
+
+    def test_traceback_goes_to_stderr(self):
+        result = self.feed_driver(HOOK_RAISE.format(target="rra.check_shell_command"), self.payload())
+        stderr = result.stderr.decode("utf-8", "replace")
+        self.assertIn("Traceback", stderr)
+        self.assertIn("ZzBoom", stderr)
+        self.assertIn("SECRET_MESSAGE", stderr)
+
+    def test_reason_points_to_the_hook(self):
+        """全操作が止まる不具合のときに対処できるよう，理由にフックの場所が書かれている."""
+        result = self.feed_driver(HOOK_RAISE.format(target="rra.check_shell_command"), self.payload())
+        self.assertIn("restrict_repo_access.py", self.assertHookDenies(result))
+
+    def test_exception_with_broken_str_is_denied(self):
+        setup = ("class ZzBoom(Exception):\n"
+                 "    def __str__(self):\n"
+                 "        raise RuntimeError('broken')\n"
+                 "def boom(*args, **kwargs):\n"
+                 "    raise ZzBoom()\n"
+                 "rra.check_shell_command = boom\n")
+        self.assertIn("想定外の例外（ZzBoom）", self.assertHookDenies(self.feed_driver(setup, self.payload())))
+
+    def test_via_wrapper(self):
+        """settings.json と同じ起動方法でも拒否の JSON が届く."""
+        reason = self.assertHookDeniesUnexpected(self.feed_wrapper(b"{"))
+        self.assertIn("JSONDecodeError", reason)
+
+
+class TestHookBrokenInput(HookIOMixin, unittest.TestCase):
+    """壊れた入力は拒否になる."""
+
+    def test_broken_json(self):
+        cases = (b"{", b"}", b"not json", b'{"tool_name": "Bash"', b"{'tool_name': 'Bash'}",
+                 b'{"tool_name": "Bash", "tool_input": {"command": "SECRET_COMMAND')
+        for payload in cases:
+            with self.subTest(payload):
+                reason = self.assertHookDeniesUnexpected(self.feed(payload))
+                self.assertIn("JSONDecodeError", reason)
+                self.assertNotIn("SECRET_COMMAND", reason)
+
+    def test_empty_input(self):
+        for payload in (b"", b" ", b"\n", b"\r\n"):
+            with self.subTest(payload):
+                self.assertHookDeniesUnexpected(self.feed(payload))
+
+    def test_json_that_is_not_an_object(self):
+        for payload in (b"[]", b"[1]", b'[{"tool_name": "Bash"}]', b"123", b"1.5", b'"text"', b"null", b"true", b"false"):
+            with self.subTest(payload):
+                self.assertHookDeniesUnexpected(self.feed(payload))
+
+    def test_undecodable_bytes(self):
+        cases = (b"\xff", b"\x80abc", b"\xff\xfe\x00", b"\xc3",
+                 b'{"tool_name": "Bash", "tool_input": {"command": "echo \xff"}}',
+                 b'{"tool_name": "Bash", "tool_input": {"command": "echo \x82\xa0"}}')  # cp932 の「あ」
+        for payload in cases:
+            with self.subTest(payload):
+                self.assertHookDeniesUnexpected(self.feed(payload))
+
+    def test_too_deeply_nested_json(self):
+        """RecursionError も Exception なので拒否になる."""
+        self.assertHookDeniesUnexpected(self.feed(b"[" * 200000))
+
+    def test_stdin_without_binary_buffer(self):
+        for label, setup in (("StringIO", "sys.stdin = io.StringIO('{}')\n"), ("None", "sys.stdin = None\n")):
+            with self.subTest(label):
+                self.assertHookDeniesUnexpected(self.feed_driver(setup, b"{}"), label)
+
+    def test_invalid_tool_input_type(self):
+        for tool_name in ("Bash", "PowerShell", "Read", "Edit", "Write"):
+            for tool_input in ("rm x", ["rm x"], [{"command": "rm x"}], 123, 1.5, True):
+                with self.subTest(tool=tool_name, tool_input=tool_input):
+                    self.assertHookDeniesUnexpected(self.feed_tool(tool_name, tool_input))
+
+    def test_invalid_tool_input_type_holding_the_key_name(self):
+        """文字列やリストの tool_input に項目名と同じ値があっても，tool_input の型不正として拒否する."""
+        cases = (("Bash", "command"), ("Bash", ["command"]), ("PowerShell", "command"), ("Write", "file_path"),
+                 ("Edit", ["file_path"]), ("NotebookEdit", "notebook_path"), ("NotebookEdit", ["notebook_path"]))
+        for tool_name, tool_input in cases:
+            with self.subTest(tool=tool_name, tool_input=tool_input):
+                self.assertHookDeniesUnexpected(self.feed_tool(tool_name, tool_input))
+
+    def test_invalid_tool_input_reason_has_no_command(self):
+        reason = self.assertHookDeniesUnexpected(self.feed_tool("Bash", "rm SECRET_COMMAND"))
+        self.assertNotIn("SECRET_COMMAND", reason)
+
+    def bad_cwd_inputs(self):
+        return {
+            "Bash echo": ("Bash", {"command": "echo hi"}),
+            "Bash rm": ("Bash", {"command": "rm ./a"}),
+            "Read relative": ("Read", {"file_path": "file.txt"}),
+            "Edit relative": ("Edit", {"file_path": "file.txt", "old_string": "x", "new_string": "y"}),
+        }
+
+    def bad_cwd_absolute_inputs(self):
+        target = os.path.join(self.repo, "file.txt")
+        return {
+            "Read absolute": ("Read", {"file_path": target}),
+            "Edit absolute": ("Edit", {"file_path": target, "old_string": "x", "new_string": "y"}),
+        }
+
+    def test_invalid_cwd_type_with_absolute_path(self):
+        """不正な型の cwd を拒否するのは cwd を使う判定だけ．CLAUDE_PROJECT_DIR と絶対パスで判定できれば影響しない."""
+        for label, (tool_name, tool_input) in self.bad_cwd_absolute_inputs().items():
+            for cwd in (123, 1.5, True, ["x"], {"a": 1}):
+                with self.subTest(label, cwd=cwd):
+                    data = {"tool_name": tool_name, "tool_input": tool_input, "cwd": cwd}
+                    self.assertHookAllows(self.feed(self.raw(data)), label)
+
+    def test_invalid_cwd_type_keeps_decision_for_outside_absolute_path(self):
+        """cwd を使わない判定なので，リポジトリ外の判定も cwd の型によらず変わらない."""
+        edit = {"file_path": self.existing, "old_string": "x", "new_string": "y"}
+        for cwd in (123, ["x"]):
+            with self.subTest(cwd=cwd):
+                reason = self.assertHookDenies(self.feed(self.raw({"tool_name": "Edit", "tool_input": edit, "cwd": cwd})))
+                self.assertNotIn(UNEXPECTED_PREFIX, reason)
+                read = {"tool_name": "Read", "tool_input": {"file_path": self.existing}, "cwd": cwd}
+                self.assertHookAllows(self.feed(self.raw(read)))
+
+    def test_invalid_cwd_type(self):
+        for label, (tool_name, tool_input) in self.bad_cwd_inputs().items():
+            for cwd in (123, 1.5, True, ["x"], {"a": 1}):
+                with self.subTest(label, cwd=cwd):
+                    data = {"tool_name": tool_name, "tool_input": tool_input, "cwd": cwd}
+                    self.assertHookDeniesUnexpected(self.feed(self.raw(data)), label)
+
+    def test_invalid_cwd_type_without_project_dir(self):
+        inputs = dict(self.bad_cwd_inputs(), **self.bad_cwd_absolute_inputs())
+        for label, (tool_name, tool_input) in inputs.items():
+            for cwd in (123, ["x"]):
+                with self.subTest(label, cwd=cwd):
+                    data = {"tool_name": tool_name, "tool_input": tool_input, "cwd": cwd}
+                    self.assertHookDeniesUnexpected(self.feed(self.raw(data), self.hook_env(project_dir=False)), label)
+
+
+class TestHookInvalidValueType(HookIOMixin, unittest.TestCase):
+    """判定の対象の値（コマンド・書き込み先のパス）が文字列でなければ拒否する."""
+
+    INVALID_REASON = "型が不正"
+    TARGETS = (("Bash", "command"), ("PowerShell", "command"), ("Write", "file_path"), ("Edit", "file_path"),
+               ("MultiEdit", "file_path"), ("NotebookEdit", "notebook_path"))
+
+    def outside_marker(self) -> str:
+        return os.path.join(self.out, "zz_marker_in_list")
+
+    def invalid_values(self):
+        marker = self.outside_marker()
+        return ([marker], ["rm", marker], ["rm -rf " + _fwd(marker)], [], 0, False, {}, None, 123, True)
+
+    def test_invalid_type_is_denied(self):
+        for tool_name, key in self.TARGETS:
+            for value in self.invalid_values():
+                with self.subTest(tool=tool_name, value=value):
+                    result = self.feed_tool(tool_name, {key: value})
+                    reason = self.assertHookDenies(result)
+                    self.assertIn(self.INVALID_REASON, reason)
+                    self.assertNotIn(UNEXPECTED_PREFIX, reason)
+                    self.assertNotIn("zz_marker_in_list", reason)
+                    self.assertEqual(result.stderr, b"")
+
+    def test_invalid_type_is_denied_with_extra_fields(self):
+        """他の項目が正常でも結果は同じ（Edit の old_string 等）."""
+        edit = {"file_path": [self.outside_marker()], "old_string": "x", "new_string": "y"}
+        self.assertIn(self.INVALID_REASON, self.assertHookDenies(self.feed_tool("Edit", edit)))
+        write = {"file_path": 0, "content": "x"}
+        self.assertIn(self.INVALID_REASON, self.assertHookDenies(self.feed_tool("Write", write)))
+
+    def test_invalid_type_is_denied_without_project_dir(self):
+        for tool_name, key in self.TARGETS:
+            with self.subTest(tool_name):
+                reason = self.assertHookDenies(self.feed_tool(tool_name, {key: []}, self.hook_env(project_dir=False)))
+                self.assertIn(self.INVALID_REASON, reason)
+
+    def test_invalid_type_is_denied_via_wrapper(self):
+        payload = self.raw({"tool_name": "Bash", "tool_input": {"command": ["rm", self.outside_marker()]},
+                            "cwd": self.repo})
+        self.assertIn(self.INVALID_REASON, self.assertHookDenies(self.feed_wrapper(payload)))
+
+    def test_invalid_type_with_unwritable_stdout_exits_2(self):
+        for kind in self.UNWRITABLE_KINDS:
+            with self.subTest(kind), self.unwritable(kind) as stdout:
+                payload = self.raw({"tool_name": "Bash", "tool_input": {"command": []}, "cwd": self.repo})
+                self.assertEqual(self.feed(payload, stdout=stdout).returncode, 2)
+
+    def test_missing_key_or_empty_string_is_allowed(self):
+        for tool_name, key in self.TARGETS:
+            with self.subTest(tool=tool_name, value="missing"):
+                self.assertHookAllows(self.feed_tool(tool_name, {"other": "x"}))
+            with self.subTest(tool=tool_name, value="empty"):
+                self.assertHookAllows(self.feed_tool(tool_name, {key: ""}))
+
+    def test_read_side_paths_are_not_judged_by_type(self):
+        cases = (("Read", "file_path", {}), ("Grep", "path", {"pattern": "x"}), ("Glob", "path", {"pattern": "*.py"}))
+        for tool_name, key, others in cases:
+            for value in self.invalid_values():
+                with self.subTest(tool=tool_name, value=value):
+                    self.assertHookAllows(self.feed_tool(tool_name, dict(others, **{key: value})))
+
+    def test_other_tools_are_not_judged_by_type(self):
+        marker = self.outside_marker()
+        for tool_input in ({"command": ["rm", marker]}, {"file_path": [marker]}, {"notebook_path": [marker]}):
+            with self.subTest(tool_input=tool_input):
+                self.assertHookAllows(self.feed_tool("TodoWrite", tool_input))
+
+    def test_keys_of_other_tools_are_not_judged(self):
+        """見るのはそのツールの項目だけ（Bash の file_path や Write の command は判定の対象でない）."""
+        self.assertHookAllows(self.feed_tool("Bash", {"command": "echo hi", "file_path": ["x"]}))
+        self.assertHookAllows(self.feed_tool("Write", {"file_path": os.path.join(self.repo, "n.txt"), "command": ["x"]}))
+
+
+class TestHookBrokenConfig(HookIOMixin, unittest.TestCase):
+    """repo-access.json が壊れていて警告を出せないときの動作."""
+
+    BROKEN_CONFIGS = ("{broken", json.dumps({"deny_read": [1, 2]}))
+
+    def write_config(self, text: str) -> None:
+        with open(os.path.join(self.repo, ".claude", "repo-access.json"), "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+    def rm_payload(self, target: str) -> bytes:
+        return self.raw({"tool_name": "Bash", "tool_input": {"command": f'rm "{target}"'}, "cwd": self.repo})
+
+    def test_rm_in_repo_is_denied_when_warning_cannot_be_written(self):
+        """禁止リストを読めず警告も出せないので，判定できないものとして想定外の例外で拒否する."""
+        for text in self.BROKEN_CONFIGS:
+            self.write_config(text)
+            for kind in self.UNWRITABLE_KINDS:
+                with self.subTest(config=text, kind=kind), self.unwritable(kind) as stderr:
+                    self.assertHookDeniesUnexpected(self.feed(self.rm_payload("file.txt"), stderr=stderr), kind)
+
+    def test_rm_outside_is_denied_when_warning_cannot_be_written(self):
+        target = _fwd(self.existing)
+        for kind in self.UNWRITABLE_KINDS:
+            self.write_config("{broken")
+            with self.subTest(kind), self.unwritable(kind) as stderr:
+                self.assertHookDenies(self.feed(self.rm_payload(target), stderr=stderr), kind)
+
+    def test_rm_outside_with_stderr_none_outputs_only_deny_json(self):
+        """sys.stderr が None のとき警告が stdout に混ざると，拒否の JSON が壊れて素通りする."""
+        self.write_config("{broken")
+        self.assertHookDenies(self.feed_driver("sys.stderr = None\n", self.rm_payload(_fwd(self.existing))))
+
+    def test_rm_in_repo_with_stderr_none_keeps_stdout_clean(self):
+        """許可のときも stdout に判定以外のものを出さない."""
+        self.write_config("{broken")
+        result = self.feed_driver("sys.stderr = None\n", self.rm_payload("file.txt"))
+        if result.stdout.strip():
+            self.assertHookDeniesUnexpected(result)
+        else:
+            self.assertEqual(result.returncode, 0)
+
+    def test_rm_in_repo_is_allowed_when_warning_can_be_written(self):
+        """stderr に書ければ従来どおり，禁止リストを空として扱って判定を続ける."""
+        for text in self.BROKEN_CONFIGS:
+            self.write_config(text)
+            with self.subTest(config=text):
+                result = self.feed(self.rm_payload("file.txt"))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), b"")
+                self.assertTrue(result.stderr.strip(), "stderr に警告が出ること")
+
+
+@unittest.skipUnless(os.path.exists("/dev/full"), "/dev/full は Linux 固有のデバイス（書き込みが必ず ENOSPC になる）のため．"
+                     "他の OS でも書き込みの失敗は TestHookOutputFailure の閉じたパイプ等で確認している")
+class TestHookDevFull(HookIOMixin, unittest.TestCase):
+    """本物の書き込み失敗（ディスクフル相当）でも終了コードが 120 にならない."""
+
+    def test_stdout_full_exits_2(self):
+        with open("/dev/full", "wb") as stdout:
+            self.assertEqual(self.feed(b"{", stdout=stdout).returncode, 2)
+            payload = self.raw({"tool_name": "Bash", "tool_input": {"command": f'rm "{_fwd(self.existing)}"'},
+                                "cwd": self.repo})
+            self.assertEqual(self.feed(payload, stdout=stdout).returncode, 2)
+
+    def test_stderr_full_still_denies(self):
+        with open("/dev/full", "wb") as stderr:
+            self.assertHookDeniesUnexpected(self.feed(b"{", stderr=stderr))
+
+
+class TestHookToolInputNotJudged(HookIOMixin, unittest.TestCase):
+    """判定しないツールの tool_input の型は問わず，空の tool_input は入力なしとして扱う."""
+
+    def test_string_tool_input_of_other_tools(self):
+        for tool_name in ("TodoWrite", "WebSearch"):
+            with self.subTest(tool_name):
+                self.assertHookAllows(self.feed_tool(tool_name, "text"))
+
+    def test_empty_list_tool_input(self):
+        for tool_name in ("Bash", "PowerShell", "Read", "Edit", "Write", "TodoWrite"):
+            with self.subTest(tool_name):
+                self.assertHookAllows(self.feed_tool(tool_name, []))
+
+
+class TestHookOutputFailure(HookIOMixin, unittest.TestCase):
+    """stdout に書けなければ終了コード 2 でブロックし，stderr に書けなくても拒否は続く."""
+
+    BROKEN_WRITE = ("class Broken(io.StringIO):\n"
+                    "    def write(self, text):\n"
+                    "        raise OSError('broken')\n"
+                    "{stream} = Broken()\n")
+    BROKEN_FLUSH = ("class Broken(io.StringIO):\n"
+                    "    def flush(self):\n"
+                    "        raise OSError('broken')\n"
+                    "{stream} = Broken()\n")
+
+    def deny_payloads(self):
+        rm_outside = {"tool_name": "Bash", "tool_input": {"command": f'rm "{_fwd(self.existing)}"'}, "cwd": self.repo}
+        nul = {"tool_name": "Bash", "tool_input": {"command": "echo a\0b"}, "cwd": self.repo}
+        return {"normal deny": self.raw(rm_outside), "NUL deny": self.raw(nul), "broken json": b"{", "empty": b""}
+
+    def test_stdout_unwritable_exits_2(self):
+        for kind in self.UNWRITABLE_KINDS:
+            for label, payload in self.deny_payloads().items():
+                with self.subTest(kind=kind, payload=label), self.unwritable(kind) as stdout:
+                    self.assertEqual(self.feed(payload, stdout=stdout).returncode, 2)
+
+    def test_stdout_replaced_with_broken_stream_exits_2(self):
+        setups = {"None": "sys.stdout = None\n", "write": self.BROKEN_WRITE.format(stream="sys.stdout"),
+                  "flush": self.BROKEN_FLUSH.format(stream="sys.stdout")}
+        for label, setup in setups.items():
+            for name, payload in self.deny_payloads().items():
+                with self.subTest(stream=label, payload=name):
+                    self.assertEqual(self.feed_driver(setup, payload).returncode, 2)
+
+    def test_stdout_unwritable_via_wrapper_exits_2(self):
+        for kind in self.UNWRITABLE_KINDS:
+            with self.subTest(kind), self.unwritable(kind) as stdout:
+                self.assertEqual(self.feed_wrapper(b"{", stdout=stdout).returncode, 2)
+
+    def test_allowed_input_does_not_need_stdout(self):
+        data = {"tool_name": "Read", "tool_input": {"file_path": "file.txt"}, "cwd": self.repo}
+        for kind in self.UNWRITABLE_KINDS:
+            with self.subTest(kind), self.unwritable(kind) as stdout:
+                self.assertEqual(self.feed(self.raw(data), stdout=stdout).returncode, 0)
+
+    def test_stderr_unwritable_still_denies(self):
+        for kind in self.UNWRITABLE_KINDS:
+            with self.subTest(kind), self.unwritable(kind) as stderr:
+                self.assertHookDeniesUnexpected(self.feed(b"{", stderr=stderr), kind)
+
+    def test_stderr_unwritable_keeps_normal_deny(self):
+        """stderr に何も書かない通常の拒否も，stderr の状態に影響されない."""
+        data = {"tool_name": "Bash", "tool_input": {"command": f'rm "{_fwd(self.existing)}"'}, "cwd": self.repo}
+        for kind in self.UNWRITABLE_KINDS:
+            with self.subTest(kind), self.unwritable(kind) as stderr:
+                self.assertHookDenies(self.feed(self.raw(data), stderr=stderr), kind)
+
+    def test_stderr_unwritable_with_injected_exception_still_denies(self):
+        setup = HOOK_RAISE.format(target="rra.check_shell_command")
+        payload = self.raw({"tool_name": "Bash", "tool_input": {"command": "echo hi"}, "cwd": self.repo})
+        for kind in self.UNWRITABLE_KINDS:
+            with self.subTest(kind), self.unwritable(kind) as stderr:
+                self.assertHookDeniesUnexpected(self.feed_driver(setup, payload, stderr=stderr), kind)
+
+    def test_stderr_replaced_with_broken_stream_still_denies(self):
+        setups = {"None": "sys.stderr = None\n", "write": self.BROKEN_WRITE.format(stream="sys.stderr")}
+        for label, setup in setups.items():
+            with self.subTest(label):
+                self.assertHookDeniesUnexpected(self.feed_driver(setup, b"{"), label)
+
+    def test_both_unwritable_exits_2(self):
+        for kind in self.UNWRITABLE_KINDS:
+            with self.subTest(kind), self.unwritable(kind) as stream:
+                self.assertEqual(self.feed(b"{", stdout=stream, stderr=stream).returncode, 2)
+
+
+class TestHookDoesNotCatchExit(HookIOMixin, unittest.TestCase):
+    """SystemExit・KeyboardInterrupt は捕捉しない（拒否に変えない）."""
+
+    def run_main_with(self, target: str, tool_name: str, tool_input: dict, error: BaseException):
+        payload = self.raw({"tool_name": tool_name, "tool_input": tool_input, "cwd": self.repo})
+        stdout = io.StringIO()
+        with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": self.repo}), \
+                mock.patch.object(self.rra, target, side_effect=error), \
+                mock.patch.object(sys, "stdin", io.TextIOWrapper(io.BytesIO(payload))), \
+                mock.patch.object(sys, "stdout", stdout):
+            try:
+                self.rra.main()
+            finally:
+                self.captured_stdout = stdout.getvalue()
+
+    def cases(self):
+        return (("check_shell_command", "Bash", {"command": "echo hi"}),
+                ("check_file_tool", "Read", {"file_path": "file.txt"}))
+
+    def test_keyboard_interrupt_propagates(self):
+        for target, tool_name, tool_input in self.cases():
+            with self.subTest(target):
+                with self.assertRaises(KeyboardInterrupt):
+                    self.run_main_with(target, tool_name, tool_input, KeyboardInterrupt())
+                self.assertEqual(self.captured_stdout, "")
+
+    def test_system_exit_keeps_its_code(self):
+        for target, tool_name, tool_input in self.cases():
+            with self.subTest(target):
+                with self.assertRaises(SystemExit) as caught:
+                    self.run_main_with(target, tool_name, tool_input, SystemExit(7))
+                self.assertEqual(caught.exception.code, 7)
+                self.assertEqual(self.captured_stdout, "")
+
+    def test_exit_code_of_real_process(self):
+        setup = ("def leave(*args, **kwargs):\n"
+                 "    raise SystemExit(7)\n"
+                 "rra.check_shell_command = leave\n")
+        payload = self.raw({"tool_name": "Bash", "tool_input": {"command": "echo hi"}, "cwd": self.repo})
+        result = self.feed_driver(setup, payload)
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertEqual(result.stdout, b"")
+
+
+class TestHookNulCommand(HookIOMixin, unittest.TestCase):
+    """Bash / PowerShell のコマンドの NUL は OS・対象によらず拒否する（main を通す）."""
+
+    def assertNulDenied(self, result, label=""):
+        reason = self.assertHookDenies(result, label)
+        self.assertIn(NUL_REASON, reason, label)
+        self.assertNotIn(UNEXPECTED_PREFIX, reason, label)
+        self.assertEqual(result.stderr, b"", label)
+
+    def commands(self):
+        outside = _fwd(self.out)
+        return (("Bash", "rm /tmp/a\0b"), ("Bash", "rm ./a\0b"), ("Bash", f"rm {outside}/zz/a\0b"),
+                ("Bash", "echo a\0b"), ("PowerShell", "Remove-Item ./a\0b"), ("PowerShell", "Write-Output a\0b"),
+                ("Bash", "\0"), ("Bash", "\0echo a"), ("Bash", "echo a\0"), ("Bash", "rm ./a\0"),
+                ("Bash", "echo 日本語\0"), ("PowerShell", f'Remove-Item "{self.existing}\0"'))
+
+    def test_denied_with_escaped_json(self):
+        for tool_name, command in self.commands():
+            with self.subTest(tool=tool_name, command=command):
+                self.assertNulDenied(self.run_main({"tool_name": tool_name, "tool_input": {"command": command},
+                                                    "cwd": self.repo}, self.hook_env()))
+
+    def test_denied_with_raw_utf8_json(self):
+        for tool_name, command in self.commands():
+            with self.subTest(tool=tool_name, command=command):
+                self.assertNulDenied(self.feed_tool(tool_name, {"command": command}))
+
+    def test_denied_without_project_dir(self):
+        for tool_name, command in self.commands():
+            with self.subTest(tool=tool_name, command=command):
+                self.assertNulDenied(self.feed_tool(tool_name, {"command": command}, self.hook_env(project_dir=False)))
+
+    def test_denied_via_wrapper(self):
+        payload = self.raw({"tool_name": "Bash", "tool_input": {"command": "rm ./a\0b"}, "cwd": self.repo})
+        self.assertNulDenied(self.feed_wrapper(payload))
+
+    def test_raw_nul_byte_in_json_text_is_denied(self):
+        """JSON の文字列に生の NUL は書けない（壊れた JSON）．どちらの理由でも拒否される."""
+        self.assertHookDenies(self.feed(b'{"tool_name": "Bash", "tool_input": {"command": "echo a\x00b"}}'))
+
+    def test_nul_outside_command_is_not_judged(self):
+        """NUL の拒否の対象はコマンド文字列だけ（Write の内容や説明文は判定しない）."""
+        self.assertHookAllows(self.feed_tool("Bash", {"command": "echo hi", "description": "a\0b"}))
+        self.assertHookAllows(self.feed_tool("Write", {"file_path": os.path.join(self.repo, "n.txt"), "content": "a\0b"}))
+
+
+class TestHookReadsUtf8Bytes(HookIOMixin, unittest.TestCase):
+    """入力はロケールの文字コードによらず UTF-8 の JSON として読む."""
+
+    # None はロケールの既定（日本語の Windows なら cp932）のまま起動する
+    ENCODINGS = ("cp932", "utf-8", "ascii", "latin-1", None)
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.named_existing = os.path.join(self.out, "既存語.txt")
+        with open(self.named_existing, "w", encoding="utf-8") as fh:
+            fh.write("x")
+        with open(os.path.join(self.repo, "日本語.txt"), "w", encoding="utf-8") as fh:
+            fh.write("x")
+
+    def encoding_env(self, encoding) -> dict:
+        env = self.hook_env()
+        for key in ("PYTHONIOENCODING", "PYTHONUTF8"):
+            env.pop(key, None)
+        if encoding is not None:
+            env["PYTHONIOENCODING"] = encoding
+        return env
+
+    def each_encoding(self):
+        for encoding in self.ENCODINGS:
+            yield encoding, self.encoding_env(encoding)
+
+    def test_premise_cp932_text_mode_breaks_this_input(self):
+        """再現の前提: `語` の直後の `\\"` は，cp932 のテキストモードで読むと JSON として壊れる."""
+        payload = self.raw({"tool_name": "Bash", "tool_input": {"command": 'echo "日本語"'}, "cwd": self.repo})
+        self.assertIn(b'\xe8\xaa\x9e\\"', payload)
+        result = subprocess.run([sys.executable, "-B", "-c", "import json, sys; json.load(sys.stdin)"], input=payload,
+                                capture_output=True, env=self.encoding_env("cp932"), timeout=TIMEOUT)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"JSONDecodeError", result.stderr)
+
+    def test_quote_right_after_japanese_is_allowed(self):
+        repo_file = os.path.join(self.repo, "日本語.txt")
+        cases = {
+            "echo": ("Bash", {"command": 'echo "日本語"'}),
+            "escaped quote": ("Bash", {"command": 'echo "語\\"語"'}),
+            "commit": ("Bash", {"command": 'git commit -m "[fix] 日本語"'}),
+            "rm in repo": ("Bash", {"command": 'rm "./語"'}),
+            "PowerShell": ("PowerShell", {"command": 'Write-Output "日本語"'}),
+            "Write in repo": ("Write", {"file_path": repo_file, "content": '"日本語"'}),
+            "Write new outside": ("Write", {"file_path": os.path.join(self.out, "新規語.txt"), "content": '"語"'}),
+            "Edit in repo": ("Edit", {"file_path": repo_file, "old_string": '"語"', "new_string": '"日本語"'}),
+        }
+        for label, (tool_name, tool_input) in cases.items():
+            for encoding, env in self.each_encoding():
+                with self.subTest(label, encoding=encoding):
+                    payload = self.raw({"tool_name": tool_name, "tool_input": tool_input, "cwd": self.repo})
+                    self.assertIn(b"\xe8\xaa\x9e", payload)
+                    self.assertHookAllows(self.feed(payload, env), label)
+
+    def test_japanese_without_quote_is_allowed(self):
+        for encoding, env in self.each_encoding():
+            with self.subTest(encoding=encoding):
+                self.assertHookAllows(self.feed_tool("Bash", {"command": "echo 日本語"}, env))
+                self.assertHookAllows(self.feed_tool("Read", {"file_path": self.named_existing}, env))
+
+    def test_japanese_outside_is_denied(self):
+        outside = _fwd(self.out)
+        named = _fwd(self.named_existing)
+        cases = {
+            "rm": ("Bash", {"command": f'rm "{outside}/日本語"'}, "日本語"),
+            "rm -rf": ("Bash", {"command": f'rm -rf "{outside}/語"'}, "語"),
+            "rm unquoted": ("Bash", {"command": f"rm {outside}/日本語"}, "日本語"),
+            "redirect": ("Bash", {"command": f'echo 語 > "{named}"'}, "既存語"),
+            "Remove-Item": ("PowerShell", {"command": f'Remove-Item "{outside}/日本語"'}, "日本語"),
+            "Edit": ("Edit", {"file_path": self.named_existing, "old_string": "語", "new_string": "語"}, "既存語"),
+        }
+        for label, (tool_name, tool_input, shown) in cases.items():
+            for encoding, env in self.each_encoding():
+                with self.subTest(label, encoding=encoding):
+                    reason = self.assertHookDenies(self.feed_tool(tool_name, tool_input, env), label)
+                    self.assertNotIn(UNEXPECTED_PREFIX, reason, label)
+                    self.assertIn(shown, reason, "文字化けせずに読めている")
+
+    def test_write_over_existing_japanese_file_is_denied(self):
+        """既存ファイルかどうかの判定は，名前を正しく読めていないと許可に倒れる."""
+        for encoding, env in self.each_encoding():
+            with self.subTest(encoding=encoding):
+                tool_input = {"file_path": self.named_existing, "content": "語"}
+                reason = self.assertHookDenies(self.feed_tool("Write", tool_input, env))
+                self.assertNotIn(UNEXPECTED_PREFIX, reason)
+
+    def test_via_wrapper(self):
+        allow = self.raw({"tool_name": "Bash", "tool_input": {"command": 'echo "日本語"'}, "cwd": self.repo})
+        self.assertHookAllows(self.feed_wrapper(allow))
+        target = _fwd(os.path.join(self.out, "日本語"))
+        denied = self.raw({"tool_name": "Bash", "tool_input": {"command": f'rm "{target}"'}, "cwd": self.repo})
+        self.assertNotIn(UNEXPECTED_PREFIX, self.assertHookDenies(self.feed_wrapper(denied)))
+
+    def test_reason_is_ascii_safe_under_any_output_encoding(self):
+        """拒否の JSON は stdout の文字コードによらず UTF-8 として読める（assertHookDenies が読む）."""
+        for encoding, env in self.each_encoding():
+            with self.subTest(encoding=encoding):
+                self.assertIn("JSONDecodeError", self.assertHookDeniesUnexpected(self.feed(b"{", env)))
+
+
+class TestHookNormalDecisionsViaMain(HookIOMixin, unittest.TestCase):
+    """例外の捕捉で，正常な入力の判定は変わらない."""
+
+    def test_read(self):
+        self.assertHookAllows(self.feed_tool("Read", {"file_path": os.path.join(self.repo, "file.txt")}))
+        self.assertHookAllows(self.feed_tool("Read", {"file_path": self.existing}))
+
+    def test_edit(self):
+        edit = {"old_string": "x", "new_string": "y"}
+        self.assertHookAllows(self.feed_tool("Edit", dict(edit, file_path=os.path.join(self.repo, "file.txt"))))
+        reason = self.assertHookDenies(self.feed_tool("Edit", dict(edit, file_path=self.existing)))
+        self.assertNotIn(UNEXPECTED_PREFIX, reason)
+
+    def test_bash_rm(self):
+        self.assertHookAllows(self.feed_tool("Bash", {"command": "rm file.txt"}))
+        reason = self.assertHookDenies(self.feed_tool("Bash", {"command": f'rm "{_fwd(self.existing)}"'}))
+        self.assertNotIn(UNEXPECTED_PREFIX, reason)
+
+    def test_powershell_remove_item(self):
+        reason = self.assertHookDenies(self.feed_tool("PowerShell", {"command": f'Remove-Item "{self.existing}"'}))
+        self.assertNotIn(UNEXPECTED_PREFIX, reason)
+
+    def test_no_tool_name(self):
+        self.assertHookAllows(self.feed(b"{}"))
+        self.assertHookAllows(self.feed(self.raw({"tool_input": {"command": "echo hi"}, "cwd": self.repo})))
+
+    def test_missing_or_null_tool_input(self):
+        for tool_name in ("Bash", "Read", "Edit"):
+            with self.subTest(tool_name):
+                self.assertHookAllows(self.feed(self.raw({"tool_name": tool_name, "cwd": self.repo})))
+                self.assertHookAllows(self.feed_tool(tool_name, None))
+
+    def test_ascii_escaped_json_is_read_the_same(self):
+        data = {"tool_name": "Bash", "tool_input": {"command": 'echo "日本語"'}, "cwd": self.repo}
+        self.assertHookAllows(self.run_main(data, self.hook_env()))
+
+    def test_nul_in_transcript_path_does_not_deny_other_decisions(self):
+        """使えない transcript_path は無いものとして扱う（どのパスの判定でも拒否にはしない）."""
+        transcript = {"transcript_path": os.path.join(self.base, "session\0.jsonl")}
+        self.assertHookAllows(self.feed_tool("Read", {"file_path": "file.txt"}, **transcript))
+        self.assertHookAllows(self.feed_tool("Bash", {"command": "rm file.txt"}, **transcript))
+        reason = self.assertHookDenies(self.feed_tool("Bash", {"command": f'rm "{_fwd(self.existing)}"'}, **transcript))
+        self.assertNotIn(UNEXPECTED_PREFIX, reason)
+
+
 if __name__ == "__main__":
     unittest.main()
