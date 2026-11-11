@@ -17,7 +17,7 @@
 - Edit / NotebookEdit: 既存ファイルの書き換えなので拒否する
 - インライン実行（python -c 等）: 削除系の呼び出しがありリポジトリ外のパスを
   含む場合と，既知の上書き呼び出し（open(..., 'w') 等）の対象が既存ファイルの場合に拒否する
-- 禁止リスト（deny_read）に該当するパスは，どの操作でも拒否する
+- 禁止リスト（deny_read）に該当するパスは，どの操作でも拒否する（許可ゾーン・allow_write より優先）
 - 入力の読み取りや判定で想定外の例外が起きたら拒否する（壊れた入力を含む．対象がリポジトリ外かは問わない）
 - Bash / PowerShell のコマンドに NUL 文字があれば拒否する（コマンドの種類・対象を問わない）
 - Bash / PowerShell のコマンドと Write / Edit / MultiEdit / NotebookEdit の書き込み先のパスが，
@@ -26,10 +26,17 @@
 リポジトリの基準は CLAUDE_PROJECT_DIR（無ければフック入力の cwd）．相対パスは
 フック入力の cwd を起点に，コマンド内の cd / pushd / Set-Location 等を追跡して解決する．
 
-禁止リスト: <リポジトリ>/.claude/repo-access.json
-    {"deny_read": ["~/.ssh", "/etc", "secrets"]}
-  絶対パス・`~` 始まり・リポジトリルート相対を受け付ける．ファイルが無ければ空，
+設定ファイル: <リポジトリ>/.claude/repo-access.json
+    {"deny_read": ["~/.ssh", "/etc", "secrets"], "allow_write": ["../sibling-repo", "~/work/data-repo"]}
+  deny_read（禁止リスト）: 読み取り・書き込みとも拒否するパス．
+  allow_write（書き込み許可ディレクトリ）: リポジトリ外でも上書き・Edit・削除・移動を許可する
+    ディレクトリ（配下だけ．ディレクトリ自体の削除・移動は許可しない）．deny_read に当たるパスは拒否が優先する．
+  どちらも絶対パス・`~` 始まり・リポジトリルート相対（`../` で隣のフォルダ）を受け付ける．ファイルが無ければ空，
   壊れていれば空として扱い stderr に警告する（警告を書けなければ想定外の例外として拒否する）．
+  deny_read が不正なときは allow_write も空として扱う（禁止リストが効かないまま書き込みだけ許可しない）．
+  allow_write の次の指定は無視して stderr に警告する: 配列でない（全体）・文字列でない要素，
+  ワイルドカード・波括弧を含む，`~user`，存在しない・ディレクトリでない，ファイルシステムのルート，
+  ホームディレクトリそのもの・その祖先，リポジトリ自身・その祖先（`..` 等），~/.claude の中．
 
 許可ゾーン（リポジトリ外でも削除・上書きを許可する）:
 - システム一時ディレクトリ（/tmp・%TEMP% 等．Claude Code のスクラッチパッドを含む）
@@ -47,6 +54,9 @@
   だけのワイルドカード（memory/*・memory/*.md）は許可する（rm 等が一致したリンク自体を消すだけの
   場合はリンク先を判定しない．Bash で末尾に / があるとリンク先の中身が消えるので，その場合は判定する）．
   transcript_path の親の階層に [ や { があると，メモのフォルダの許可は効かない（安全側の制限）
+- repo-access.json の allow_write に書いたディレクトリの配下．許可ディレクトリ・対象ともリンクを解決した
+  実パスで判定するので，許可ディレクトリの外へのリンク越しの操作は許可しない（rm 等がリンク自体を
+  消すだけの場合は許可する）．実際の対象を文字列から確定できないパスはメモのフォルダと同じく許可しない
 
 パスの展開と解決（削除・上書き・作成の対象について）:
 - 波括弧は Bash 系の方言でだけ展開して，元の文字列のままの判定に加えて展開後の各パスも判定する
@@ -447,8 +457,8 @@ def absolute_unnormalized(token: str, cwd: str | None, dialect: str = "bash") ->
     return token
 
 
-def is_ambiguous_for_memory(path: str) -> bool:
-    """メモのフォルダの配下と文字列から確定できないパスかを判定する.
+def is_ambiguous_path(path: str) -> bool:
+    """実際の対象を文字列から確定できないパスかを判定する（メモのフォルダ・書き込み許可ディレクトリの判定用）.
 
     波括弧はシェルが展開すると `..` で外に出ることがあり，`..` は途中のリンクの先の親として
     OS が解決し（memory/link/../x），途中の階層のワイルドカードはリンクに一致しうる．
@@ -732,10 +742,13 @@ def looks_absolute(text: str) -> bool:
 # 判定コンテキスト
 # ---------------------------------------------------------------------------
 class Policy:
-    def __init__(self, repo_root: str, deny_read: list, transcript_path: str | None = None) -> None:
+    def __init__(self, repo_root: str, deny_read: list, transcript_path: str | None = None,
+                 allow_write: list | None = None) -> None:
         self.repo_root = repo_root
         self.deny_read = deny_read
         self.transcript_path = transcript_path
+        # load_allow_write で検証済みのディレクトリ．比較用に実パス + normcase に揃える（済みなら変わらない）
+        self.allow_write = [norm(p) for p in (allow_write or [])]
 
     def denied_entry(self, path: str) -> str | None:
         """path が禁止リストのいずれかの配下なら，その禁止エントリを返す."""
@@ -769,6 +782,26 @@ class Policy:
         base = os.path.join(norm(os.path.dirname(os.path.normpath(transcript))), "memory")
         return norm(path).startswith(base + os.sep)
 
+    def is_inside_allow_write(self, path: str, keep_final_link: bool = False) -> bool:
+        """path が書き込み許可ディレクトリ（allow_write）の配下かを判定する（ディレクトリ自体は含まない）.
+
+        許可ディレクトリは読み込み時に実パスに解決済み．対象も実パスに解決して比べるので，
+        許可ディレクトリの中から外へのリンク越しの操作は基準から外れて拒否になる．
+        keep_final_link なら最後の要素のリンクを解決しない（リンク自体を消すだけの操作の判定用）．
+        想定外の失敗は例外を外へ漏らさず，許可しない（安全側）．
+        """
+        if not self.allow_write:
+            return False
+        try:
+            head, tail = os.path.split(path)
+            if keep_final_link and tail not in ("", ".", ".."):
+                real = os.path.normcase(os.path.join(os.path.realpath(head), tail))
+            else:
+                real = norm(path)
+            return any(real.startswith(base.rstrip("/\\") + os.sep) for base in self.allow_write)
+        except Exception:
+            return False
+
     def is_write_allowed(self, path: str, raw: str | None = None, keep_final_link: bool = False) -> bool:
         """path（解決済み）への書き込みを許可するかを判定する．raw はコマンド中の元の文字列.
 
@@ -778,9 +811,10 @@ class Policy:
         """
         if self.is_inside_repo(path) or is_temp_path(path, keep_final_link):
             return True
-        if is_ambiguous_for_memory(path) or (raw is not None and is_ambiguous_for_memory(raw)):
+        # メモのフォルダと書き込み許可ディレクトリは，実際の対象を文字列から確定できるパスだけ許可する
+        if is_ambiguous_path(path) or (raw is not None and is_ambiguous_path(raw)):
             return False
-        return self.is_inside_memory(path)
+        return self.is_inside_memory(path) or self.is_inside_allow_write(path, keep_final_link)
 
 
 def deny_read_message(target: str, entry: str) -> str:
@@ -791,14 +825,21 @@ def deny_read_message(target: str, entry: str) -> str:
     )
 
 
+def read_config(repo_root: str):
+    """`.claude/repo-access.json` を読み込む．ファイルが無ければ None．読めない・壊れていれば OSError / ValueError."""
+    config_path = os.path.join(repo_root, *CONFIG_RELPATH.split("/"))
+    if not os.path.exists(config_path):
+        return None
+    with open(config_path, encoding="utf-8") as f:
+        return json.load(f)
+
+
 def load_deny_read(repo_root: str) -> list:
     """`.claude/repo-access.json` の deny_read を絶対パスのリストとして読み込む."""
-    config_path = os.path.join(repo_root, ".claude", "repo-access.json")
-    if not os.path.exists(config_path):
-        return []
     try:
-        with open(config_path, encoding="utf-8") as f:
-            config = json.load(f)
+        config = read_config(repo_root)
+        if config is None:
+            return []
         entries = config.get("deny_read", []) if isinstance(config, dict) else None
         if not isinstance(entries, list) or not all(isinstance(e, str) for e in entries):
             raise ValueError("deny_read は文字列の配列で指定してください")
@@ -817,6 +858,88 @@ def load_deny_read(repo_root: str) -> list:
             entry = os.path.join(repo_root, entry)
         result.append(os.path.normpath(entry))
     return result
+
+
+def warn_config(message: str) -> None:
+    """設定ファイルに関する警告を stderr に書く（書けなければ例外になり deny_on_exception で拒否される）."""
+    sys.stderr.write(f"[restrict_repo_access] {CONFIG_RELPATH}: {message}\n")
+
+
+def allow_write_rejection(real: str, repo_root: str) -> str | None:
+    """書き込み許可ディレクトリとして危険・無意味な指定なら，無視する理由を返す.
+
+    real は実パスに解決済みの絶対パス．比較は is_within_directory（実パス + normcase）で行う．
+    """
+    if not os.path.isdir(real):
+        return "存在しないかディレクトリではありません"
+    if os.path.dirname(real) == real:
+        return "ファイルシステムのルートです"
+    if is_within_directory(home_dir(), real):
+        return "ホームディレクトリそのもの，またはその祖先です"
+    if is_within_directory(repo_root, real):
+        return "リポジトリ自身，またはその祖先（親ディレクトリ等）です"
+    if is_within_directory(real, os.path.join(home_dir(), ".claude")):
+        return "Claude Code の設定フォルダ（~/.claude）の中です"
+    return None
+
+
+def resolve_allow_write_entry(text: str, repo_root: str) -> tuple:
+    """allow_write の 1 要素を実パスに解決する．(実パス, None) か，無視する場合は (None, 理由) を返す."""
+    if "\0" in text or "{" in text or "}" in text or has_wildcard(text):
+        return None, "ワイルドカード・波括弧等を含み，対象を確定できません"
+    expanded = convert_posix_drive(expand_home(text))
+    if expanded.startswith("~"):
+        return None, "~user 形式は解決しません"
+    if not is_absolute(expanded):
+        expanded = os.path.join(repo_root, expanded)
+    try:
+        real = os.path.realpath(os.path.normpath(expanded))
+        reason = allow_write_rejection(real, repo_root)
+    except (OSError, ValueError) as e:
+        return None, f"パスを解決できません（{e}）"
+    return (None, reason) if reason else (real, None)
+
+
+def load_allow_write(repo_root: str) -> list:
+    """`.claude/repo-access.json` の allow_write を，比較用の実パス（normcase 済み）のリストとして読み込む.
+
+    安全側に倒すため，以下は空・無視として扱い stderr に警告する.
+    - ファイルが読めない・JSON として壊れている・オブジェクトでない・deny_read が不正（全体を空として扱う．
+      禁止リストが効かない状態で書き込みだけ許可されないようにする）
+    - allow_write が配列でない（全体を無視），要素が文字列でない（その要素を無視）
+    - 実際の対象を文字列から確定できない指定（ワイルドカード・波括弧・NUL・`~user`）
+    - 危険・無意味な指定（allow_write_rejection 参照）
+    """
+    try:
+        config = read_config(repo_root)
+        if config is None:
+            return []
+        if not isinstance(config, dict):
+            raise ValueError("オブジェクトではありません")
+        deny_entries = config.get("deny_read", [])
+        if not isinstance(deny_entries, list) or not all(isinstance(e, str) for e in deny_entries):
+            raise ValueError("deny_read が文字列の配列ではありません")
+    except (OSError, ValueError) as e:
+        warn_config(f"読み込めないため書き込み許可（allow_write）を空として扱います: {e}")
+        return []
+    entries = config.get("allow_write", [])
+    if not isinstance(entries, list):
+        warn_config("allow_write は文字列の配列で指定してください．allow_write を無視します")
+        return []
+    result = []
+    for entry in entries:
+        if not isinstance(entry, str):
+            warn_config(f"allow_write の文字列でない要素を無視します: {entry!r}")
+            continue
+        text = entry.strip()
+        if not text:
+            continue
+        real, reason = resolve_allow_write_entry(text, repo_root)
+        if reason:
+            warn_config(f"allow_write の `{text}` を無視します: {reason}")
+            continue
+        result.append(os.path.normcase(real))
+    return list(dict.fromkeys(result))
 
 
 # ---------------------------------------------------------------------------
@@ -1092,13 +1215,13 @@ class Findings:
         self.writes: list = []  # (コマンド名, 元の文字列, 解決済みパス, 操作種別)
         self.reads: list = []  # (コマンド名, 元の文字列, 解決済みパス, 再帰的か)
         self.inline: list = []  # (コマンド名, リテラル, 解決済みパス, 操作種別)
-        # cd 等の移動先を文字列から確定できなかった（追跡中の cwd からはメモの配下と言えない）
+        # cd 等の移動先を文字列から確定できなかった（追跡中の cwd からはメモのフォルダ・書き込み許可ディレクトリの配下と言えない）
         self.ambiguous_cd = False
         self.unexpandable: list = []  # (コマンド名, 元の文字列) 波括弧を展開できなかった削除・上書きの対象
 
     def note_location_change(self, dest: str) -> None:
         """cd 等の移動先を記録する．移動先は最後の要素のワイルドカードも確定できない."""
-        if is_ambiguous_for_memory(dest + "/"):  # 末尾に区切りを足して最後の要素も途中の階層として見る
+        if is_ambiguous_path(dest + "/"):  # 末尾に区切りを足して最後の要素も途中の階層として見る
             self.ambiguous_cd = True
 
 
@@ -1828,7 +1951,7 @@ def destructive_reason(kind: str, raw: str, resolved: str, policy: Policy, name:
 def evaluate_findings(findings: Findings, policy: Policy) -> str | None:
     """解析結果を判定し，拒否する場合は理由文字列を返す."""
     if findings.ambiguous_cd:
-        policy = Policy(policy.repo_root, policy.deny_read)  # メモのフォルダの許可だけを外す
+        policy = Policy(policy.repo_root, policy.deny_read)  # メモのフォルダ・書き込み許可ディレクトリの許可だけを外す
     if findings.unexpandable:
         name, raw = findings.unexpandable[0]
         return (
@@ -1881,15 +2004,17 @@ def check_shell_command(analyzer, command: str, cwd: str, policy: Policy) -> str
 
 
 def check_bash_command(command: str, cwd: str, repo_root: str | None = None, deny_read: list | None = None,
-                       transcript_path: str | None = None) -> str | None:
+                       transcript_path: str | None = None, allow_write: list | None = None) -> str | None:
     """Bash コマンドがリポジトリ外の削除・上書き，禁止パスへのアクセスを含むか判定する."""
-    return check_shell_command(analyze_bash, command, cwd, Policy(repo_root or cwd, deny_read or [], transcript_path))
+    return check_shell_command(analyze_bash, command, cwd,
+                               Policy(repo_root or cwd, deny_read or [], transcript_path, allow_write))
 
 
 def check_powershell_command(command: str, cwd: str, repo_root: str | None = None, deny_read: list | None = None,
-                             transcript_path: str | None = None) -> str | None:
+                             transcript_path: str | None = None, allow_write: list | None = None) -> str | None:
     """PowerShell コマンドがリポジトリ外の削除・上書き，禁止パスへのアクセスを含むか判定する."""
-    return check_shell_command(analyze_powershell, command, cwd, Policy(repo_root or cwd, deny_read or [], transcript_path))
+    return check_shell_command(analyze_powershell, command, cwd,
+                               Policy(repo_root or cwd, deny_read or [], transcript_path, allow_write))
 
 
 def glob_base(pattern: str) -> str:
@@ -2001,7 +2126,7 @@ def run_check() -> None:
     tool_input = data.get("tool_input", {}) or {}
     cwd = data.get("cwd") or os.getcwd()
     repo_root = get_repo_root(cwd)
-    policy = Policy(repo_root, load_deny_read(repo_root), data.get("transcript_path"))
+    policy = Policy(repo_root, load_deny_read(repo_root), data.get("transcript_path"), load_allow_write(repo_root))
 
     if has_invalid_value_type(tool_name, tool_input):
         deny(INVALID_VALUE_TYPE_DENY_REASON)
