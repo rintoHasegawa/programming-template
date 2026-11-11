@@ -4497,5 +4497,394 @@ class TestHookNormalDecisionsViaMain(HookIOMixin, unittest.TestCase):
         self.assertNotIn(UNEXPECTED_PREFIX, reason)
 
 
+# ---------------------------------------------------------------------------
+# restrict_repo_access.py: 書き込み許可ディレクトリ allow_write（Issue #64）
+# ---------------------------------------------------------------------------
+# サンドボックス（一時ディレクトリの外）に repo と並べて sib/ を置き，repo-access.json の
+# allow_write に "../sib" を書いて判定する．設定は load_allow_write（main と同じ読み込み）で読む．
+class AllowWriteSandboxMixin(Issue59SandboxMixin):
+    """sandbox/
+         repo/                    仮のリポジトリ
+         sib/                     書き込み許可ディレクトリ（allow_write: ../sib）
+           file.txt・sub/deep.txt・secret/key.txt
+         sib2/file.txt            名前が前方一致する別のディレクトリ（許可しない）
+         outside/                 リポジトリ外（許可しない）
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.sib = os.path.join(self.base, "sib")
+        self.sib_file = self.touch(self.sib, "file.txt")
+        self.sib_deep = self.touch(self.sib, "sub", "deep.txt")
+        self.sib_secret = self.touch(self.sib, "secret", "key.txt")
+        self.sib2_file = self.touch(self.base, "sib2", "file.txt")
+        self.s = _fwd(self.sib)
+        self.allow = []
+
+    def write_config(self, config) -> None:
+        text = config if isinstance(config, str) else json.dumps(config)
+        with open(os.path.join(self.repo, ".claude", "repo-access.json"), "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+    def load(self, config) -> tuple:
+        """設定を書いて（仮のホームで）load_allow_write・load_deny_read を呼び，結果と stderr を返す."""
+        self.write_config(config)
+        err = io.StringIO()
+        with self.fake_home(), contextlib.redirect_stderr(err):
+            allow = self.rra.load_allow_write(self.repo)
+            deny = self.rra.load_deny_read(self.repo)
+        return allow, deny, err.getvalue()
+
+    def use(self, config) -> str:
+        """設定を読み込んで判定に使う（以降の bash・ps・tool に効く）."""
+        self.allow, self.deny, err = self.load(config)
+        return err
+
+    def bash(self, command: str, cwd: str | None = None):
+        return self.rra.check_bash_command(command, cwd or self.repo, repo_root=self.repo, deny_read=self.deny,
+                                           transcript_path=self.transcript_path, allow_write=self.allow)
+
+    def ps(self, command: str, cwd: str | None = None):
+        return self.rra.check_powershell_command(command, cwd or self.repo, repo_root=self.repo, deny_read=self.deny,
+                                                 transcript_path=self.transcript_path, allow_write=self.allow)
+
+    def tool(self, name: str, tool_input: dict, cwd: str | None = None):
+        policy = self.rra.Policy(self.repo, self.deny, self.transcript_path, self.allow)
+        return self.rra.check_file_tool(name, tool_input, cwd or self.repo, policy)
+
+    def assertSame(self, loaded: list, expected: list) -> None:
+        normed = [os.path.normcase(os.path.realpath(p)) for p in expected]
+        self.assertEqual([os.path.normcase(p) for p in loaded], normed)
+
+
+class TestAllowWriteLoad(AllowWriteSandboxMixin, unittest.TestCase):
+    """設定の書き方（deny_read と同じ）と，危険・無効な指定の無視と警告."""
+
+    def test_relative_sibling_entry(self):
+        allow, _, err = self.load({"allow_write": ["../sib"]})
+        self.assertSame(allow, [self.sib])
+        self.assertEqual(err, "")
+
+    def test_absolute_entries(self):
+        for entry in (self.sib, _fwd(self.sib), _fwd(self.sib) + "/"):
+            with self.subTest(entry):
+                allow, _, err = self.load({"allow_write": [entry]})
+                self.assertSame(allow, [self.sib])
+                self.assertEqual(err, "")
+
+    def test_home_entry(self):
+        work = os.path.join(self.home, "work")
+        os.makedirs(work)
+        allow, _, err = self.load({"allow_write": ["~/work"]})
+        self.assertSame(allow, [work])
+        self.assertEqual(err, "")
+
+    def test_repo_root_relative_entry(self):
+        """リポジトリルート相対で解決する."""
+        allow, _, _ = self.load({"allow_write": ["../outside/dir"]})
+        self.assertSame(allow, [os.path.join(self.out, "dir")])
+
+    @unittest.skipUnless(os.name == "nt", "Git Bash 形式のパス（/c/...）は Windows 固有のため")
+    def test_gitbash_form_entry(self):
+        allow, _, _ = self.load({"allow_write": [_gitbash(self.sib)]})
+        self.assertSame(allow, [self.sib])
+
+    def test_missing_config_or_key_is_empty_without_warning(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(self.rra.load_allow_write(self.repo), [])
+        self.assertEqual(err.getvalue(), "")
+        allow, _, err = self.load({"deny_read": ["~/.ssh"]})
+        self.assertEqual(allow, [])
+        self.assertEqual(err, "")
+
+    def test_broken_config_is_empty_with_warning(self):
+        """壊れた設定は空扱い（許可側に倒れない）．deny_read が不正なときも allow_write を空にする."""
+        configs = ["{broken", json.dumps(["../sib"]), json.dumps("../sib"),
+                   json.dumps({"deny_read": "~/.ssh", "allow_write": ["../sib"]}),
+                   json.dumps({"deny_read": [1], "allow_write": ["../sib"]}),
+                   json.dumps({"deny_read": None, "allow_write": ["../sib"]})]
+        for text in configs:
+            with self.subTest(text):
+                allow, _, err = self.load(text)
+                self.assertEqual(allow, [])
+                self.assertTrue(err.strip(), "stderr に警告が出ること")
+
+    def test_non_list_allow_write_is_ignored_with_warning(self):
+        for value in ("../sib", {"a": "../sib"}, 1, True, None):
+            with self.subTest(repr(value)):
+                allow, _, err = self.load({"allow_write": value})
+                self.assertEqual(allow, [])
+                self.assertTrue(err.strip(), "stderr に警告が出ること")
+
+    def test_non_string_element_is_ignored_but_others_kept(self):
+        allow, _, err = self.load({"allow_write": [1, None, ["../sib"], "../sib"]})
+        self.assertSame(allow, [self.sib])
+        self.assertTrue(err.strip(), "stderr に警告が出ること")
+
+    def assertIgnored(self, entries) -> None:
+        """危険な指定は無視して警告し，同時に書いた正しい指定（../sib）は効くこと."""
+        for entry in entries:
+            with self.subTest(entry=entry):
+                allow, _, err = self.load({"allow_write": [entry, "../sib"]})
+                self.assertSame(allow, [self.sib])
+                self.assertTrue(err.strip(), f"stderr に警告が出ること: {entry}")
+
+    def test_filesystem_root_is_ignored(self):
+        self.assertIgnored(["/", os.path.abspath(os.sep), _fwd(os.path.abspath(os.sep))])
+
+    def test_home_itself_and_ancestors_are_ignored(self):
+        self.assertIgnored(["~", "~/", self.home, _fwd(self.home) + "/", "~/.."])
+
+    def test_dir_containing_home_is_ignored(self):
+        """ホームの祖先（allow_write に書いたディレクトリの中にホームがある）は無視する."""
+        home = os.path.join(self.sib, "userhome")
+        os.makedirs(home)
+        self.write_config({"allow_write": ["../sib"]})
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, {"HOME": home, "USERPROFILE": home}), contextlib.redirect_stderr(err):
+            self.assertEqual(self.rra.load_allow_write(self.repo), [])
+        self.assertTrue(err.getvalue().strip())
+
+    def test_repo_itself_and_ancestors_are_ignored(self):
+        self.assertIgnored(["..", "../", ".", "./", "../..", self.repo, self.base, _fwd(self.base), "../sib/.."])
+
+    def test_nonexistent_or_file_is_ignored(self):
+        self.assertIgnored(["../no_such_dir", os.path.join(self.base, "no_such_dir"), "../sib/file.txt",
+                            self.existing])
+
+    def test_claude_config_folder_is_ignored(self):
+        os.makedirs(os.path.join(self.home, ".claude", "projects"), exist_ok=True)
+        self.assertIgnored(["~/.claude", "~/.claude/projects", os.path.join(self.home, ".claude")])
+
+    def test_wildcard_brace_and_user_home_are_ignored(self):
+        self.assertIgnored(["../si*", "../si?", "../s[i]b", "../{sib,outside}", "../sib{,2}", "~nosuchuser_x/dir"])
+
+    def test_empty_string_is_ignored(self):
+        allow, _, _ = self.load({"allow_write": ["", "   ", "../sib"]})
+        self.assertSame(allow, [self.sib])
+
+    def test_symlinked_allow_dir_is_resolved(self):
+        link = os.path.join(self.base, "siblink")
+        self.link_dir(self.sib, link)
+        allow, _, _ = self.load({"allow_write": ["../siblink"]})
+        self.assertSame(allow, [self.sib])
+
+    def test_link_to_dangerous_dir_is_ignored(self):
+        """リンク経由で書いてもリンク先（リポジトリの親）で判定する."""
+        link = os.path.join(self.out, "to_base")
+        self.link_dir(self.base, link)
+        allow, _, err = self.load({"allow_write": ["../outside/to_base"]})
+        self.assertEqual(allow, [])
+        self.assertTrue(err.strip())
+
+
+class TestAllowWriteOperations(AllowWriteSandboxMixin, unittest.TestCase):
+    """allow_write の配下はリポジトリ外でも上書き・Edit・削除・移動を許可する."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.use({"allow_write": ["../sib"]})
+        self.assertTrue(self.allow)
+
+    def test_all_write_ops_allowed_inside(self):
+        self.assertAllWriteOpsAllowed(self.sib_file)
+        self.assertAllWriteOpsAllowed(self.sib_deep)
+
+    def test_notebook_edit_allowed_inside(self):
+        self.assertAllowed(self.tool("NotebookEdit", {"notebook_path": self.sib_file}))
+
+    def test_delete_and_move_subdirectory(self):
+        sub = _fwd(os.path.join(self.sib, "sub"))
+        self.assertBashAllowed([f'rm -rf "{sub}"', f'mv "{sub}" "{self.s}/sub2"', f'rm -r "{self.s}/sub/"',
+                                f'cp -r "{self.r}/sub" "{self.s}/sub"'])
+        self.assertPsAllowed([f'Remove-Item "{os.path.join(self.sib, "sub")}" -Recurse -Force',
+                              f'Move-Item "{os.path.join(self.sib, "sub")}" "{os.path.join(self.sib, "sub2")}"'])
+
+    def test_cd_into_allow_dir_then_relative(self):
+        self.assertBashAllowed([f'cd "{self.s}" && rm file.txt', f'cd "{self.s}" && rm -rf sub',
+                                f'cd "{self.s}" && echo y > file.txt'])
+        self.assertBashAllowed(["rm file.txt", "rm -rf sub", "sed -i s/x/y/ sub/deep.txt"], cwd=self.sib)
+        self.assertPsAllowed([f'Set-Location "{self.sib}"; Remove-Item file.txt'])
+
+    def test_allow_dir_itself_is_not_deletable(self):
+        self.assertBashDenied([f'rm -rf "{self.s}"', f'rm -rf "{self.s}/"', f'rm -rf "{self.s}/."',
+                               f'mv "{self.s}" "{self.o}/moved"', f'cd "{self.s}" && rm -rf .'])
+        self.assertPsDenied([f'Remove-Item "{self.sib}" -Recurse -Force',
+                             f'Move-Item "{self.sib}" "{os.path.join(self.out, "moved")}"'])
+
+    def test_move_or_copy_onto_existing_outside_is_denied(self):
+        self.assertBashDenied([f'mv "{_fwd(self.sib_file)}" "{_fwd(self.existing)}"',
+                               f'cp "{_fwd(self.sib_file)}" "{_fwd(self.existing)}"'])
+
+    def test_outside_and_similar_names_still_denied(self):
+        self.assertAllWriteOpsDenied(self.existing)
+        self.assertAllWriteOpsDenied(self.sib2_file)
+
+    def test_ambiguous_paths_are_denied(self):
+        s = self.s
+        self.assertBashDenied([
+            f'rm "{s}"/{{file.txt,sub/deep.txt}}',
+            f'rm {s}/{{file.txt,x}}',
+            f'rm "{s}/sub/../file.txt"',
+            f'rm {s}/*/deep.txt',
+            f'echo y > "{s}/sub/../file.txt"',
+            f'cd {s}/* && rm deep.txt',
+            f'cd "{s}/sub/.." && rm file.txt',
+        ])
+        self.assertDenied(self.tool("Edit", {"file_path": os.path.join(self.sib, "sub", "..", "file.txt")}))
+
+    def test_relative_dotdot_in_command_is_denied(self):
+        """コマンド中の `..`（../sib/...）は文字列から対象を確定できないとして許可しない（Issue #64）."""
+        self.assertBashDenied(["rm ../sib/file.txt", "echo y > ../sib/file.txt"])
+        self.assertPsDenied(["Remove-Item ../sib/file.txt"])
+
+    def test_link_escaping_allow_dir_is_denied(self):
+        link = os.path.join(self.sib, "escape")
+        self.link_dir(os.path.join(self.out, "dir"), link)
+        self.assertAllWriteOpsDenied(os.path.join(link, "file.txt"))
+        self.assertBashDenied([f'rm -rf "{_fwd(link)}/"'])
+
+    @unittest.skipIf(os.name == "nt", "リンク自体を消すだけかの判定は POSIX のシンボリックリンクで確かめる"
+                                      "（Windows はシンボリックリンク作成に権限が要り，ジャンクションでは rm の挙動が異なるため）")
+    def test_removing_link_itself_is_allowed(self):
+        link = os.path.join(self.sib, "escape")
+        os.symlink(os.path.join(self.out, "dir"), link, target_is_directory=True)
+        self.assertBashAllowed([f'rm "{_fwd(link)}"', f'rm -f "{_fwd(link)}"', "rm escape"], cwd=self.sib)
+        filelink = os.path.join(self.sib, "filelink")
+        os.symlink(self.existing, filelink)
+        self.assertBashAllowed([f'rm "{_fwd(filelink)}"'])
+        self.assertBashDenied([f'echo y > "{_fwd(filelink)}"', f'sed -i s/x/y/ "{_fwd(filelink)}"'])
+        self.assertDenied(self.tool("Edit", {"file_path": filelink}))
+
+    def test_access_via_link_to_allow_dir_is_allowed(self):
+        """実パスで判定するので，許可ディレクトリを指すリンク経由の操作は許可する."""
+        link = os.path.join(self.out, "to_sib")
+        self.link_dir(self.sib, link)
+        self.assertAllowed(self.tool("Edit", {"file_path": os.path.join(link, "file.txt")}))
+        self.assertAllowed(self.bash(f'rm "{_fwd(link)}/file.txt"'))
+
+    def test_deny_read_takes_precedence(self):
+        self.use({"deny_read": ["../sib/secret"], "allow_write": ["../sib"]})
+        self.assertAllWriteOpsDenied(self.sib_secret)
+        self.assertBashDenied([f'rm -rf "{self.s}/secret"', f'cat "{_fwd(self.sib_secret)}"'])
+        self.assertAllWriteOpsAllowed(self.sib_file)
+
+    def test_without_allow_write_behavior_unchanged(self):
+        for config in ({"deny_read": []}, {}, {"allow_write": []}):
+            with self.subTest(config=config):
+                self.use(config)
+                self.assertAllWriteOpsDenied(self.sib_file)
+        self.assertAllowed(self.tool("Write", {"file_path": os.path.join(self.sib, "new.txt")}))
+        self.assertAllowed(self.tool("Read", {"file_path": self.sib_file}))
+        self.assertAllowed(self.bash("rm -rf sub"))
+
+    def test_invalid_deny_read_disables_allow_write(self):
+        self.use({"deny_read": [1], "allow_write": ["../sib"]})
+        self.assertAllWriteOpsDenied(self.sib_file)
+
+    def test_ignored_entries_grant_nothing(self):
+        self.use({"allow_write": ["..", "~", "/", "../si*", "../{sib,outside}"]})
+        self.assertEqual(self.allow, [])
+        self.assertAllWriteOpsDenied(self.sib_file)
+        self.assertAllWriteOpsDenied(self.existing)
+
+    def test_does_not_extend_to_other_zones(self):
+        """allow_write は他プロジェクトのメモ・~/.claude の判定を変えない."""
+        self.assertAllWriteOpsDenied(self.other_note)
+        self.assertAllWriteOpsDenied(self.settings)
+
+
+@unittest.skipUnless(os.name == "nt", "パスの大文字小文字の同一視・Git Bash 形式は Windows 固有のため")
+class TestAllowWriteWindowsCase(AllowWriteSandboxMixin, unittest.TestCase):
+    def test_case_difference_in_config_and_command(self):
+        self.use({"allow_write": ["../SIB"]})
+        self.assertTrue(self.allow)
+        self.assertAllWriteOpsAllowed(os.path.join(self.base, "SIB", "FILE.TXT"))
+        self.assertAllWriteOpsAllowed(self.sib_file)
+        self.assertAllWriteOpsDenied(self.sib2_file)
+        self.assertBashDenied([f'rm -rf "{_fwd(os.path.join(self.base, "SIB"))}"'])
+
+    def test_gitbash_form_in_command(self):
+        self.use({"allow_write": ["../sib"]})
+        self.assertAllowed(self.bash(f'rm "{_gitbash(self.sib_file)}"'))
+
+
+class TestAllowWriteViaMain(AllowWriteSandboxMixin, HookIOMixin, unittest.TestCase):
+    """main に標準入力で JSON を渡す経路で allow_write が読まれること."""
+
+    def inputs(self, path: str) -> dict:
+        f = _fwd(path)
+        return {
+            "Edit": ("Edit", {"file_path": path, "old_string": "x", "new_string": "y"}),
+            "Write": ("Write", {"file_path": path, "content": "y"}),
+            "Bash rm": ("Bash", {"command": f'rm "{f}"'}),
+            "Bash mv": ("Bash", {"command": f'mv "{f}" "{f}.moved"'}),
+            "Bash redirect": ("Bash", {"command": f'echo y > "{f}"'}),
+            "PowerShell Remove-Item": ("PowerShell", {"command": f'Remove-Item "{path}"'}),
+        }
+
+    def assertAllAllowedViaMain(self, path: str) -> None:
+        for label, (name, tool_input) in self.inputs(path).items():
+            with self.subTest(label, path=path):
+                self.assertHookAllows(self.feed_tool(name, tool_input), label)
+
+    def assertAllDeniedViaMain(self, path: str) -> None:
+        for label, (name, tool_input) in self.inputs(path).items():
+            with self.subTest(label, path=path):
+                self.assertHookDenies(self.feed_tool(name, tool_input), label)
+
+    def test_allowed_with_config(self):
+        self.write_config({"allow_write": ["../sib"]})
+        self.assertAllAllowedViaMain(self.sib_file)
+        self.assertAllDeniedViaMain(self.existing)
+        self.assertHookDenies(self.feed_tool("Bash", {"command": f'rm -rf "{self.s}"'}))
+
+    def test_denied_without_allow_write(self):
+        self.write_config({"deny_read": []})
+        self.assertAllDeniedViaMain(self.sib_file)
+
+    def test_deny_read_wins_via_main(self):
+        self.write_config({"deny_read": ["../sib/secret"], "allow_write": ["../sib"]})
+        self.assertAllDeniedViaMain(self.sib_secret)
+        self.assertAllAllowedViaMain(self.sib_file)
+
+    def test_broken_deny_read_disables_allow_write_via_main(self):
+        self.write_config({"deny_read": "~/.ssh", "allow_write": ["../sib"]})
+        self.assertAllDeniedViaMain(self.sib_file)
+
+    def test_dangerous_entry_warns_and_valid_entry_still_works(self):
+        self.write_config({"allow_write": ["..", "../sib"]})
+        result = self.feed_tool("Bash", {"command": f'rm "{_fwd(self.sib_file)}"'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), b"")
+        self.assertTrue(result.stderr.strip(), "stderr に警告が出ること")
+        self.assertHookDenies(self.feed_tool("Bash", {"command": f'rm "{_fwd(self.existing)}"'}))
+
+    def test_parent_entry_does_not_allow_outside(self):
+        self.write_config({"allow_write": [".."]})
+        self.assertAllDeniedViaMain(self.existing)
+        self.assertAllDeniedViaMain(self.sib_file)
+
+    def test_warning_unwritable_is_denied(self):
+        """警告を書けないときは判定できないものとして拒否する（リポジトリ内の操作でも）."""
+        self.write_config({"allow_write": ["..", "../sib"]})
+        payload = self.raw({"tool_name": "Bash", "tool_input": {"command": "rm file.txt"}, "cwd": self.repo})
+        for kind in self.UNWRITABLE_KINDS:
+            with self.subTest(kind), self.unwritable(kind) as stderr:
+                self.assertHookDeniesUnexpected(self.feed(payload, stderr=stderr), kind)
+        self.assertHookDenies(self.feed_driver("sys.stderr = None\n", payload))
+
+    def test_via_wrapper_like_settings_json(self):
+        self.write_config({"allow_write": ["../sib"]})
+        data = {"tool_name": "Edit", "tool_input": {"file_path": self.sib_file, "old_string": "x", "new_string": "y"},
+                "cwd": self.repo}
+        result = self.feed_wrapper(self.raw(data))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), b"")
+        data["tool_input"]["file_path"] = self.existing
+        self.assertHookDenies(self.feed_wrapper(self.raw(data)))
+
+
 if __name__ == "__main__":
     unittest.main()
