@@ -64,7 +64,7 @@ Remove-Item README.md
 - `/deps-update` — Dependabot の依存更新 PR と alert を処理（メジャー更新でなく CI／ローカル検証が緑の PR は `main` に自動マージ，メジャー更新・CI 赤・修正版なし alert は影響分析付きで報告．`/deps-update report` で報告のみ）
 - `/sync-template` — テンプレートの最新変更を取り込む（プロジェクトで意図的に変えたファイルは `.claude/template-overrides.md` の台帳に登録しておくと，上書きせず方針に従ってマージ／保持される）
 - `/set-mode <solo\|team>` — 開発モードを切り替える（team 層ファイル・settings.json・CLAUDE.md・project-mode を一括整合）
-- `/task-create` / `/task-start` / `/task-handoff` — Issue ベースのタスク作成・着手・引継ぎ（solo / team 両モード共通）
+- `/task-create` / `/task-start` / `/task-handoff` — Issue ベースのタスク作成・着手・引継ぎ（solo / team 両モード共通．`/task-start` は Issue を読んで人間の判断が要らなければ，または数問の質問で解消できればそのまま `/implement` に進む．着手準備だけなら `--prep-only`）
 
 ## リポジトリ外アクセスの制限
 

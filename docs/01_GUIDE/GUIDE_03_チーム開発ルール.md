@@ -61,7 +61,7 @@ Issue を立てる場合の標準フロー（小さい変更や探索的作業�
 7. マージで Issue 自動クローズ（ボード使用時はカード自動 Done）
 ```
 
-- 上記 1 は `/task-create`（事前定義用），2 と 3 は `/task-start <Issue番号>`（既存 Issue から着手）で半自動化できる．Issue 無しで進める場合はどちらも不要．
+- 上記 1 は `/task-create`（事前定義用），2〜4 は `/task-start <Issue番号>`（既存 Issue から着手）で半自動化できる（Issue を読んで人間の判断が要らなければ，または数問の質問で解消できればそのまま `/implement` に進む．会話で詰めるべき論点があれば停止する）．Issue 無しで進める場合はどちらも不要．
 - Claude へのタスク文脈は `CLAUDE.md` ではなく Issue から渡す．`gh issue view <Issue番号>` で取得する．
 
 ## ブランチと PR (Branch & PR)

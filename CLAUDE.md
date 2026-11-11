@@ -29,7 +29,7 @@
 
 ### タスク管理（任意）
 
-- やるべきことを GitHub Issues で管理してよい（solo / team 共通）．`/task-create`（起票・事前計画）→ `/task-start <Issue番号>`（着手準備）→ `/task-handoff`（中断時の引継ぎメモ投稿）を使う
+- やるべきことを GitHub Issues で管理してよい（solo / team 共通）．`/task-create`（起票・事前計画）→ `/task-start <Issue番号>`（着手準備．人間の判断が要らなければそのまま `/implement` に進む）→ `/task-handoff`（中断時の引継ぎメモ投稿）を使う
 - Issue は必須ではない．小さい変更や試験的作業は Issue 無しで進めてよい
 - solo モードでは進捗記録（`.claude/rules/progress-log.md`）は従来どおり運用し，Issue はタスクの管理・引継ぎの補助として使う
 
