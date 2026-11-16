@@ -66,7 +66,7 @@ GUIDE_01（プロジェクト立ち上げフロー）を読み，各フェーズ
      "SessionStart": [
        {
          "hooks": [
-           { "type": "command", "command": "bash .claude/hooks/check_sync.sh", "timeout": 10 }
+           { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check_sync.sh\"", "timeout": 10 }
          ]
        }
      ]
