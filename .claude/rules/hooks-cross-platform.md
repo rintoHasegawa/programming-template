@@ -22,6 +22,7 @@ paths: [".claude/hooks/**", ".github/workflows/hooks-ci.yml"]
 - 絶対パスの判定を `ntpath.isabs` の結果に直接依存させない．Python 3.13 で `ntpath.isabs` が変わり，ドライブ無しの root-relative パス（`/tmp/x`・`\tmp\x`）を False と判定するようになったため，そのまま使うと cwd と結合されて `D:\tmp\x` 等に化け，Python のバージョンで判定が変わる（フックでは `is_absolute` で Windows の `/`・`\` 始まりを常に絶対パスとして扱う）
 - Git Bash 形式のパス（`/c/Users/...`）・ドライブレター・UNC パス等の Windows 固有の変換は `os.name == "nt"` のときだけ行い，他 OS の挙動を変えない
 - シェルスクリプト（`*.sh`）は macOS 標準の bash 3.2 と BSD 版コマンドでも動く書き方にする（GNU 拡張のオプションや bash 4 以降の構文に頼らない）
+- `settings.json` 等でフックを配線するときは，コマンド中のパスを `$CLAUDE_PROJECT_DIR` 起点にしてダブルクォートで囲む（例: `bash "$CLAUDE_PROJECT_DIR/.claude/hooks/run_python.sh" "$CLAUDE_PROJECT_DIR/.claude/hooks/notify.py"`）．相対パスだと作業フォルダが移ったときにフックが見つからず，アクセス制限フックが素通りになる．ダブルクォートは Windows の `C:\Users\...` 形式やスペースを含むパスのため
 
 ## テストの書き方 (Writing Tests)
 

@@ -337,7 +337,7 @@ done
 3. **既存の hooks を保持したまま**，テンプレート側で追加・変更された hook（イベント・matcher・command）のみを統合する:
    - 既存に無いイベント／hook はテンプレート版から追加する
    - プロジェクト固有の hook（team の SessionStart `check_sync.sh` 等）は残す
-   - 同一 hook の command 変更（例: `restrict_repo_access.py` の起動方法変更）はテンプレート版に合わせる．旧形式の `python .claude/hooks/<名前>.py` は `bash .claude/hooks/run_python.sh [--fail-closed] .claude/hooks/<名前>.py` に置き換える（`--fail-closed` はテンプレート版と同じく `restrict_repo_access.py` にのみ付ける）．`run_python.sh` が同期で配置済みであることも確認する
+   - 同一 hook の command 変更（例: `restrict_repo_access.py` の起動方法変更）はテンプレート版に合わせる．旧形式の `python .claude/hooks/<名前>.py` や相対パスの `bash .claude/hooks/run_python.sh [--fail-closed] .claude/hooks/<名前>.py` は `bash "$CLAUDE_PROJECT_DIR/.claude/hooks/run_python.sh" [--fail-closed] "$CLAUDE_PROJECT_DIR/.claude/hooks/<名前>.py"`（JSON 内では `"` を `\"` にエスケープ）に置き換える（`--fail-closed` はテンプレート版と同じく `restrict_repo_access.py` にのみ付ける）．`run_python.sh` が同期で配置済みであることも確認する．team の SessionStart の `bash .claude/hooks/check_sync.sh` も同様に `bash "$CLAUDE_PROJECT_DIR/.claude/hooks/check_sync.sh"` に置き換える（相対パスだと作業フォルダが移ったときにフックが見つからない）
    - 同一 hook の matcher 変更（例: `restrict_repo_access.py` の対象ツールに `NotebookEdit`・`PowerShell` を追加）もテンプレート版に合わせる．プロジェクトが独自に足したツール名があれば残す
    - solo モードで SessionStart(check_sync) が無い場合は，team 専用の配線を勝手に追加しない
 4. `hooks` 以外のキーも同じ方針でマージする．特に `permissions.allow` は，テンプレート側に追加されたルール（`Bash(gh pr merge:*)` 等．auto mode で ops-runner にマージを実行させるために必要）を既存へ追加し，プロジェクトが独自に足したルールは残す（削除しない）

@@ -62,7 +62,7 @@
 - **前提条件**: 以下のツールは全プロジェクト共通で導入する．
   - `git` — バージョン管理（運用ルールは `.claude/rules/git-conventions.md` で定義）
   - `gh` — GitHub CLI（PR 作成・マージ等に使用）
-  - Python 3.7 以上と `bash` — `.claude/settings.json` のフック（リポジトリ外アクセス制限・通知）の実行に使用．フックは `bash .claude/hooks/run_python.sh` 経由で起動し，`python3` → `python` → `py` の順に実際に起動できるものを使う（いずれか 1 つで起動できればよい．Windows では Git for Windows 付属の `bash` を使う）．※ Python が見つからないとアクセス制限フックが対象ツール（Read・Write・Edit・NotebookEdit・Glob・Grep・Bash・PowerShell）を**すべてブロックする**（通知フックは何もせず素通りする）
+  - Python 3.7 以上と `bash` — `.claude/settings.json` のフック（リポジトリ外アクセス制限・通知）の実行に使用．フックは `bash "$CLAUDE_PROJECT_DIR/.claude/hooks/run_python.sh"` 経由で起動し（作業フォルダが移っても見つかるよう，パスはリポジトリのルート `$CLAUDE_PROJECT_DIR` 起点で書く），`python3` → `python` → `py` の順に実際に起動できるものを使う（いずれか 1 つで起動できればよい．Windows では Git for Windows 付属の `bash` を使う）．※ Python が見つからないとアクセス制限フックが対象ツール（Read・Write・Edit・NotebookEdit・Glob・Grep・Bash・PowerShell）を**すべてブロックする**（通知フックは何もせず素通りする）
 - **基本方針**: 環境の再現性を重視し，手順書だけに頼らず構築を自動化・コード化できる方法を優先する（例: Docker，Dev Containers，Windows Sandbox，IaC ツール等）．
 - **人間が決めること**: 開発マシンの選定，クラウドサービスのアカウント作成，環境構築方法の選択
 - **実際の構築まで行う**: 手順書を書いて終わりにせず，`/setup` がその手順に従って実際に環境を構築し，実行して分かった誤り・前提の抜けを手順書に反映してから人間のレビューを受ける（未検証の手順書は誤りを含みやすく，最初に詰まるのがその場のユーザーになるため）．区分は次の 3 つ（詳細は `.claude/skills/setup/reference.md`「環境構築の実行」）

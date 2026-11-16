@@ -18,6 +18,7 @@ import ntpath
 import os
 import posixpath
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -34,6 +35,14 @@ SETTINGS = os.path.join(REPO_ROOT, ".claude", "settings.json")
 RESTRICT = os.path.join(HOOKS_DIR, "restrict_repo_access.py")
 NOTIFY = os.path.join(HOOKS_DIR, "notify.py")
 CHECK_SYNC = os.path.join(HOOKS_DIR, "check_sync.sh")
+
+# settings.json のフックコマンド（Issue #69: 作業フォルダが移っても見つかるよう $CLAUDE_PROJECT_DIR 起点で書く）
+PROJECT_DIR_VAR = "$CLAUDE_PROJECT_DIR"
+WRAPPER_SETTINGS_PREFIX = 'bash "$CLAUDE_PROJECT_DIR/.claude/hooks/run_python.sh" '
+RESTRICT_SETTINGS_COMMAND = (
+    WRAPPER_SETTINGS_PREFIX + '--fail-closed "$CLAUDE_PROJECT_DIR/.claude/hooks/restrict_repo_access.py"'
+)
+NOTIFY_SETTINGS_COMMAND = WRAPPER_SETTINGS_PREFIX + '"$CLAUDE_PROJECT_DIR/.claude/hooks/notify.py"'
 
 TIMEOUT = 60
 
@@ -322,10 +331,7 @@ class TestSettingsJson(unittest.TestCase):
 
     def test_restrict_repo_access_uses_wrapper_with_fail_closed(self):
         cmds = [h["command"] for _, _, h in self.commands if "restrict_repo_access.py" in h["command"]]
-        self.assertEqual(
-            cmds,
-            ["bash .claude/hooks/run_python.sh --fail-closed .claude/hooks/restrict_repo_access.py"],
-        )
+        self.assertEqual(cmds, [RESTRICT_SETTINGS_COMMAND])
 
     def test_restrict_repo_access_is_pretooluse_for_file_tools(self):
         entries = [(e, m) for e, m, h in self.commands if "restrict_repo_access.py" in h["command"]]
@@ -339,7 +345,7 @@ class TestSettingsJson(unittest.TestCase):
         cmds = [h["command"] for _, _, h in self.commands if "notify.py" in h["command"]]
         self.assertEqual(len(cmds), 3)
         for cmd in cmds:
-            self.assertEqual(cmd, "bash .claude/hooks/run_python.sh .claude/hooks/notify.py")
+            self.assertEqual(cmd, NOTIFY_SETTINGS_COMMAND)
             self.assertNotIn("--fail-closed", cmd)
 
     def test_notify_events(self):
@@ -354,26 +360,220 @@ class TestSettingsJson(unittest.TestCase):
         for _, _, hook in self.commands:
             if ".py" in hook["command"]:
                 self.assertTrue(
-                    hook["command"].startswith("bash .claude/hooks/run_python.sh "),
+                    hook["command"].startswith(WRAPPER_SETTINGS_PREFIX),
                     hook["command"],
                 )
 
+    @staticmethod
+    def hook_path_tokens(command: str) -> list:
+        """コマンド中の `.claude/hooks/` を参照するトークン（クォートは外す．$ は展開しない）."""
+        return [t for t in shlex.split(command) if ".claude/hooks/" in t]
+
     def test_referenced_scripts_exist(self):
+        checked = 0
         for _, _, hook in self.commands:
-            for token in hook["command"].split():
-                if token.startswith(".claude/hooks/"):
-                    self.assertTrue(os.path.isfile(os.path.join(REPO_ROOT, token)), token)
+            for token in self.hook_path_tokens(hook["command"]):
+                self.assertTrue(token.startswith(PROJECT_DIR_VAR + "/"), token)
+                rel = token[len(PROJECT_DIR_VAR) + 1:]
+                self.assertTrue(os.path.isfile(os.path.join(REPO_ROOT, rel)), token)
+                checked += 1
+        self.assertGreater(checked, 0)
+
+    def test_hook_paths_are_project_dir_based_and_quoted(self):
+        """Issue #69: 相対パス（.claude/hooks/...）だと cd 後にフックが見つからず，制限フックが素通りになる."""
+        for _, _, hook in self.commands:
+            cmd = hook["command"]
+            with self.subTest(command=cmd):
+                self.assertNotIn(
+                    ".claude/hooks/",
+                    cmd.replace(PROJECT_DIR_VAR + "/.claude/hooks/", ""),
+                    "相対パスの .claude/hooks/ 参照が残っている",
+                )
+                # $CLAUDE_PROJECT_DIR を使うパスはすべてダブルクォートで囲む（Windows の C:\... やスペース対策）
+                for m in re.finditer(r"\$CLAUDE_PROJECT_DIR/\S*", cmd):
+                    start = m.start()
+                    self.assertTrue(start > 0 and cmd[start - 1] == '"', cmd)
+                    self.assertTrue(m.group(0).endswith('"'), cmd)
+
+    def test_skill_snippets_use_project_dir(self):
+        """setup / set-mode が settings.json に書き込む SessionStart(check_sync) も $CLAUDE_PROJECT_DIR 起点にする."""
+        for rel in (
+            os.path.join(".claude", "skills", "setup", "SKILL.md"),
+            os.path.join(".claude", "skills", "set-mode", "SKILL.md"),
+        ):
+            with self.subTest(file=rel):
+                with open(os.path.join(REPO_ROOT, rel), encoding="utf-8") as f:
+                    text = f.read()
+                self.assertNotIn('"command": "bash .claude/hooks/', text)
+                self.assertIn('"command": "bash \\"$CLAUDE_PROJECT_DIR/.claude/hooks/check_sync.sh\\""', text)
+
+    def test_docs_show_project_dir_based_wiring(self):
+        """GUIDE_01・hooks-cross-platform ルールの起動例も $CLAUDE_PROJECT_DIR 起点（相対パスの例を残さない）."""
+        guide_dir = os.path.join(REPO_ROOT, "docs", "01_GUIDE")
+        guides = [n for n in os.listdir(guide_dir) if n.startswith("GUIDE_01_")]
+        self.assertEqual(len(guides), 1, guides)
+        for path in (
+            os.path.join(guide_dir, guides[0]),
+            os.path.join(REPO_ROOT, ".claude", "rules", "hooks-cross-platform.md"),
+        ):
+            with self.subTest(file=os.path.basename(path)):
+                with open(path, encoding="utf-8") as f:
+                    text = f.read()
+                self.assertNotIn("bash .claude/hooks/", text)
+                self.assertIn('bash "$CLAUDE_PROJECT_DIR/.claude/hooks/run_python.sh"', text)
+
+    def test_sync_template_reference_replaces_relative_wiring(self):
+        """/sync-template は旧形式・相対パスの配線を $CLAUDE_PROJECT_DIR 起点に置き換える手順を持つ."""
+        path = os.path.join(REPO_ROOT, ".claude", "skills", "sync-template", "reference.md")
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn(
+            'bash "$CLAUDE_PROJECT_DIR/.claude/hooks/run_python.sh" [--fail-closed] '
+            '"$CLAUDE_PROJECT_DIR/.claude/hooks/<名前>.py"',
+            text,
+        )
+        self.assertIn('bash "$CLAUDE_PROJECT_DIR/.claude/hooks/check_sync.sh"', text)
+
+
+def run_settings_command(cmd: str, data: dict, project_dir: str, cwd: str) -> subprocess.CompletedProcess:
+    """settings.json のフックコマンドを Claude Code と同じく bash -c で起動する（ntfy には送らない）."""
+    env = dict(os.environ)
+    env["CLAUDE_PROJECT_DIR"] = project_dir  # Claude Code と同じくホスト OS 形式のルートを渡す
+    env.pop("NTFY_TOPIC", None)
+    env["NTFY_SERVER"] = "http://127.0.0.1:9"  # 万一送信しても外部に出ない
+    return subprocess.run(
+        [BASH, "-c", cmd],
+        input=json.dumps(data).encode("utf-8"),
+        capture_output=True,
+        env=env,
+        cwd=cwd,
+        timeout=TIMEOUT,
+    )
+
+
+def edit_outside_input(path: str, cwd: str) -> dict:
+    """リポジトリ外の既存ファイルを Edit する入力（制限フックが deny する）."""
+    return {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": path, "old_string": "a", "new_string": "b"},
+        "cwd": cwd,
+    }
+
+
+def permission_decision(result: subprocess.CompletedProcess) -> str:
+    return json.loads(result.stdout.decode("utf-8"))["hookSpecificOutput"]["permissionDecision"]
 
 
 # ---------------------------------------------------------------------------
-# restrict_repo_access.py をラッパー経由で（settings.json と同じコマンドで）起動
+# settings.json のコマンドをそのまま，リポジトリのルート以外の作業フォルダから起動（Issue #69）
+# ---------------------------------------------------------------------------
+class TestSettingsCommandFromOtherCwd(TempDirMixin, unittest.TestCase):
+    OUTSIDE = os.path.join(os.path.dirname(REPO_ROOT), "outside_of_repo_dummy.txt")
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        with open(SETTINGS, encoding="utf-8") as f:
+            settings = json.load(f)
+        cls.commands = {}
+        for groups in settings.get("hooks", {}).values():
+            for group in groups:
+                for hook in group.get("hooks", []):
+                    cmd = hook.get("command", "")
+                    for name in ("restrict_repo_access.py", "notify.py"):
+                        if name in cmd:
+                            cls.commands[name] = cmd
+
+    def run_settings_command(self, name: str, data: dict, cwd: str) -> subprocess.CompletedProcess:
+        return run_settings_command(self.commands[name], data, REPO_ROOT, cwd)
+
+    def other_cwds(self):
+        yield "subdir", os.path.join(REPO_ROOT, ".claude", "hooks")
+        yield "outside repo", self.work
+
+    def test_restrict_hook_found_and_blocks_from_other_cwd(self):
+        for label, cwd in self.other_cwds():
+            with self.subTest(cwd=label):
+                data = edit_outside_input(self.OUTSIDE, cwd)
+                result = self.run_settings_command("restrict_repo_access.py", data, cwd)
+                self.assertNotEqual(result.returncode, 127, result.stderr)
+                self.assertTrue(TestRestrictViaWrapper.is_blocked(result), (result.returncode, result.stdout, result.stderr))
+
+    def test_notify_hook_found_from_other_cwd(self):
+        for label, cwd in self.other_cwds():
+            with self.subTest(cwd=label):
+                result = self.run_settings_command("notify.py", {"hook_event_name": "Stop", "cwd": cwd}, cwd)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stderr, b"")
+
+    def test_restrict_hook_script_itself_runs_from_other_cwd(self):
+        """制限フック本体が動いていること（exit 2 は .py が見つからないときも返るので，判定結果で確かめる）."""
+        for label, cwd in self.other_cwds():
+            with self.subTest(cwd=label, op="Edit outside"):
+                data = edit_outside_input(self.OUTSIDE, cwd)
+                result = self.run_settings_command("restrict_repo_access.py", data, cwd)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(permission_decision(result), "deny")
+            with self.subTest(cwd=label, op="Read outside"):
+                # 読み取りは許可される（フックが見つからない・起動できないなら fail-closed で exit 2 になる）
+                data = {"tool_name": "Read", "tool_input": {"file_path": self.OUTSIDE}, "cwd": cwd}
+                result = self.run_settings_command("restrict_repo_access.py", data, cwd)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse(TestRestrictViaWrapper.is_blocked(result), result.stdout)
+
+    def test_old_relative_command_fails_from_subdir(self):
+        """修正前の相対パスの配線は，作業フォルダが移ると見つからない（Issue #69 の再現．修正の前提の確認）."""
+        old = "bash .claude/hooks/run_python.sh --fail-closed .claude/hooks/restrict_repo_access.py"
+        result = subprocess.run(
+            [BASH, "-c", old],
+            input=b"{}",
+            capture_output=True,
+            env=dict(os.environ),
+            cwd=os.path.join(REPO_ROOT, ".claude", "hooks"),
+            timeout=TIMEOUT,
+        )
+        self.assertEqual(result.returncode, 127, result.stderr)
+
+
+# ---------------------------------------------------------------------------
+# CLAUDE_PROJECT_DIR にスペースを含むパスでも settings.json のコマンドで起動できる（Issue #69）
+# ---------------------------------------------------------------------------
+class TestSettingsCommandWithSpacedProjectDir(TempDirMixin, unittest.TestCase):
+    OUTSIDE = TestSettingsCommandFromOtherCwd.OUTSIDE
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.project = os.path.join(self.work, "dir with space", "my repo")
+        shutil.copytree(
+            HOOKS_DIR,
+            os.path.join(self.project, ".claude", "hooks"),
+            ignore=shutil.ignore_patterns("tests", "__pycache__"),
+        )
+        self.cwd = os.path.join(self.work, "dir with space")
+
+    def run_cmd(self, cmd: str, data: dict) -> subprocess.CompletedProcess:
+        return run_settings_command(cmd, data, self.project, self.cwd)
+
+    def test_restrict_hook_runs_with_spaced_project_dir(self):
+        result = self.run_cmd(RESTRICT_SETTINGS_COMMAND, edit_outside_input(self.OUTSIDE, self.cwd))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(permission_decision(result), "deny")
+
+    def test_notify_hook_runs_with_spaced_project_dir(self):
+        result = self.run_cmd(NOTIFY_SETTINGS_COMMAND, {"hook_event_name": "Stop", "cwd": self.cwd})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, b"")
+
+
+# ---------------------------------------------------------------------------
+# restrict_repo_access.py をラッパー経由で起動
 # ---------------------------------------------------------------------------
 class TestRestrictViaWrapper(TempDirMixin, unittest.TestCase):
     OUTSIDE = os.path.join(os.path.dirname(REPO_ROOT), "outside_of_repo_dummy.txt")
     INSIDE = os.path.join(REPO_ROOT, "CLAUDE.md")
 
     def run_hook(self, data: dict, env: dict) -> subprocess.CompletedProcess:
-        # settings.json の command と同じ相対パス・cwd で起動する
+        # リポジトリのルートから相対パスで起動する（ラッパー自体の動作確認．
+        # settings.json の command そのままの起動は TestSettingsCommandFromOtherCwd 等で確かめる）
         return subprocess.run(
             [BASH, ".claude/hooks/run_python.sh", "--fail-closed", ".claude/hooks/restrict_repo_access.py"],
             input=json.dumps(data).encode("utf-8"),

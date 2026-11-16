@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Python フックの起動ラッパー.
-# 使い方: bash .claude/hooks/run_python.sh [--fail-closed] <script.py> [args...]
+# 使い方: bash "$CLAUDE_PROJECT_DIR/.claude/hooks/run_python.sh" [--fail-closed] <script.py> [args...]
 #
 # 環境ごとに Python のコマンド名が異なるため (Debian/Ubuntu 系・macOS は python3 のみ,
 # Windows の python.org 版は python / py のみで python3 は Microsoft Store を開くダミー),

@@ -69,13 +69,13 @@ rm -rf "$TEMP_DIR"
 
 ### 3-A.2 settings.json に SessionStart(check_sync) を配線
 
-`.claude/settings.json` を Read し，既存の `PreToolUse`（`restrict_repo_access.py`）を保持したまま，`SessionStart` フックを追加する（既に配線済みなら何もしない）:
+`.claude/settings.json` を Read し，既存の `PreToolUse`（`restrict_repo_access.py`）を保持したまま，`SessionStart` フックを追加する（既に配線済みなら何もしない．ただし相対パスの `bash .claude/hooks/check_sync.sh` で配線済みなら下記の `$CLAUDE_PROJECT_DIR` 起点の書き方に置き換える）:
 
 ```json
 "SessionStart": [
   {
     "hooks": [
-      { "type": "command", "command": "bash .claude/hooks/check_sync.sh", "timeout": 10 }
+      { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check_sync.sh\"", "timeout": 10 }
     ]
   }
 ]
